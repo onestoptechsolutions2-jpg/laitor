@@ -5,36 +5,43 @@ const session = require('../services/session');
 const { classify, INTENTS } = require('../services/intent');
 const whatsapp = require('../services/whatsapp');
 const crm = require('../services/crm');
+const orderService = require('../services/order');
+const ticketService = require('../services/ticket');
+const admin = require('../services/admin');
 const logger = require('../utils/logger');
 
-// ─── Response Templates ──────────────────────────────────────────────────────
+const STATES = {
+  IDLE:              'IDLE',
+  AWAITING_PRODUCT:  'AWAITING_PRODUCT',
+  AWAITING_LOCATION: 'AWAITING_LOCATION',
+};
 
 const REPLIES = {
-  [INTENTS.INTERNET_LEAD]: [
-    '✅ Thanks for reaching out to *Laitor Invest*!',
-    'We\'ve received your internet enquiry and one of our sales team will contact you shortly to discuss the best package for your area.',
-    'In the meantime, reply with your *location* so we can check availability. 📍',
+  INTERNET_LEAD_ACK: [
+    'Laitor Invest - Internet Enquiry Received!',
+    'Our sales team will contact you shortly.\n\nCould you share your location (area/estate)?',
   ],
-  [INTENTS.PRODUCT_ORDER]: [
-    '🛒 Got it! You\'re interested in placing an order.',
-    'Please tell us what product you need (e.g. CCTV camera, router) and the *quantity*, and we\'ll prepare a quote for you.',
+  PRODUCT_ORDER_ASK: [
+    'Great! Let us get your order started.',
+    'What product are you looking for? (e.g. CCTV camera, router, network cable)\n\nAlso include the quantity if you know it.',
   ],
-  [INTENTS.SUPPORT_REQUEST]: [
-    '🔧 We\'re sorry you\'re having trouble.',
-    'A support ticket has been logged and our technical team will reach out to you shortly.',
-    'Please describe your issue in more detail if you haven\'t already — this helps us resolve it faster.',
+  PRODUCT_ORDER_ACK: (product) => [
+    'Order received for: ' + product,
+    'Our team has been notified and will confirm your order and pricing shortly.',
   ],
-  [INTENTS.GENERAL_INQUIRY]: [
-    '👋 Hello! Welcome to *Laitor Invest*.',
-    'How can we help you today? You can ask about:\n• 🌐 Internet packages\n• 📦 Products & orders\n• 🔧 Technical support',
+  SUPPORT_ACK: [
+    'Support ticket logged!',
+    'Our technical team has been notified and will reach out to you shortly.',
+  ],
+  GENERAL: [
+    'Hello! Welcome to Laitor Invest.',
+    'How can we help you today?\n\nInternet packages - type "internet" or "wifi"\nProducts & orders - type "buy" or "order"\nTechnical support - type "not working" or "support"',
+  ],
+  LOCATION_RECEIVED: (location) => [
+    'Got it - ' + location + '. Our team will be in touch shortly to confirm coverage and package options.',
   ],
 };
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/**
- * Find or create customer record in local DB.
- */
 const upsertCustomer = async (phone, name) => {
   const res = await query(
     `INSERT INTO customers (phone, name)
@@ -47,9 +54,6 @@ const upsertCustomer = async (phone, name) => {
   return res.rows[0];
 };
 
-/**
- * Log message to DB for audit trail.
- */
 const logMessage = async ({ phone, direction, text, raw, msgId }) => {
   try {
     await query(
@@ -63,9 +67,6 @@ const logMessage = async ({ phone, direction, text, raw, msgId }) => {
   }
 };
 
-/**
- * Create a lead record in local DB.
- */
 const createLocalLead = async (customerId, type, notes, crmLeadId) => {
   const res = await query(
     `INSERT INTO leads (customer_id, type, notes, crm_lead_id)
@@ -75,122 +76,228 @@ const createLocalLead = async (customerId, type, notes, crmLeadId) => {
   return res.rows[0].id;
 };
 
-/**
- * Create a ticket record in local DB.
- */
-const createLocalTicket = async (customerId, issue) => {
-  const res = await query(
-    `INSERT INTO tickets (customer_id, issue)
-     VALUES ($1, $2) RETURNING id`,
-    [customerId, issue]
-  );
-  return res.rows[0].id;
+const handleInternetLead = async ({ customer, text, name, phone }) => {
+  const crmPersonId = await crm.upsertPerson({ phone, name });
+  if (crmPersonId && customer.id) {
+    await query('UPDATE customers SET crm_id = $1 WHERE id = $2', [crmPersonId, customer.id]);
+  }
+  const crmLeadId = crmPersonId
+    ? await crm.createLead({ crmPersonId, type: INTENTS.INTERNET_LEAD, notes: text })
+    : null;
+  let leadId = null;
+  if (customer.id) {
+    leadId = await createLocalLead(customer.id, INTENTS.INTERNET_LEAD, text, crmLeadId);
+  }
+  if (crmPersonId) await crm.logActivity({ crmPersonId, message: text, direction: 'in' });
+  await admin.notifyNewLead({ leadId, phone, name, message: text });
+  return { nextState: STATES.AWAITING_LOCATION, replies: REPLIES.INTERNET_LEAD_ACK };
 };
 
-// ─── Main Orchestrator ───────────────────────────────────────────────────────
+const handleProductOrderStart = async () => {
+  return { nextState: STATES.AWAITING_PRODUCT, replies: REPLIES.PRODUCT_ORDER_ASK };
+};
 
-/**
- * Process a normalised inbound WhatsApp message.
- *
- * @param {{ phone: string, name: string, text: string, msgId: string, raw: object }} msg
- */
+const handleProductOrderComplete = async ({ customer, text, name, phone }) => {
+  let order = null;
+  if (customer.id) {
+    order = await orderService.create({ customerId: customer.id, product: text, notes: text });
+  }
+  const crmPersonId = await crm.upsertPerson({ phone, name });
+  if (crmPersonId) {
+    await crm.createLead({ crmPersonId, type: INTENTS.PRODUCT_ORDER, notes: text });
+    await crm.logActivity({ crmPersonId, message: text, direction: 'in' });
+  }
+  await admin.notifyNewOrder({
+    orderId: order ? order.id : '?',
+    phone,
+    name,
+    product: text,
+    notes: text,
+  });
+  return { nextState: STATES.IDLE, replies: REPLIES.PRODUCT_ORDER_ACK(text) };
+};
+
+const handleSupportRequest = async ({ customer, text, name, phone }) => {
+  let ticket = null;
+  if (customer.id) {
+    ticket = await ticketService.create({ customerId: customer.id, issue: text });
+  }
+  const crmPersonId = await crm.upsertPerson({ phone, name });
+  if (crmPersonId) {
+    await crm.createLead({ crmPersonId, type: INTENTS.SUPPORT_REQUEST, notes: text });
+    await crm.logActivity({ crmPersonId, message: text, direction: 'in' });
+  }
+  await admin.notifyNewTicket({
+    ticketId: ticket ? ticket.id : '?',
+    phone,
+    name,
+    issue: text,
+    priority: ticket ? ticket.priority : 'medium',
+  });
+  return { nextState: STATES.IDLE, replies: REPLIES.SUPPORT_ACK };
+};
+
+const parseAdminCommand = (text) => {
+  const match = text.trim().match(/^(TICKET|ORDER)#(\d+)\s+(\w+)(?:\s+(.+))?$/i);
+  if (!match) return null;
+  return {
+    type:   match[1].toUpperCase(),
+    id:     parseInt(match[2], 10),
+    action: match[3].toUpperCase(),
+    extra:  match[4] || null,
+  };
+};
+
+const handleAdminCommand = async ({ cmd, phone }) => {
+  const adminPhones = (process.env.ADMIN_PHONES || '').split(',').map((p) => p.trim());
+  if (!adminPhones.includes(phone)) return null;
+
+  let reply = null;
+
+  if (cmd.type === 'TICKET') {
+    const statusMap = {
+      RESOLVED:    ticketService.TICKET_STATUS.RESOLVED,
+      CLOSED:      ticketService.TICKET_STATUS.CLOSED,
+      IN_PROGRESS: ticketService.TICKET_STATUS.IN_PROGRESS,
+      ASSIGNED:    ticketService.TICKET_STATUS.IN_PROGRESS,
+    };
+    const status = statusMap[cmd.action];
+    if (status) {
+      const ticket = await ticketService.updateStatus(cmd.id, status, cmd.extra);
+      if (ticket) {
+        await whatsapp.sendText(
+          ticket.phone,
+          'Update on your support ticket #' + ticket.id + ':\nStatus: ' + status.replace('_', ' ').toUpperCase() +
+          (cmd.extra ? '\nTechnician: ' + cmd.extra : '') +
+          '\n\nThank you for your patience. - Laitor Support'
+        );
+        reply = 'Ticket #' + cmd.id + ' updated to ' + status;
+      } else {
+        reply = 'Ticket #' + cmd.id + ' not found';
+      }
+    }
+  }
+
+  if (cmd.type === 'ORDER') {
+    const statusMap = {
+      CONFIRMED:  orderService.ORDER_STATUS.CONFIRMED,
+      PROCESSING: orderService.ORDER_STATUS.PROCESSING,
+      FULFILLED:  orderService.ORDER_STATUS.FULFILLED,
+      CANCELLED:  orderService.ORDER_STATUS.CANCELLED,
+    };
+    const status = statusMap[cmd.action];
+    if (status) {
+      const order = await orderService.updateStatus(cmd.id, status);
+      if (order) {
+        await whatsapp.sendText(
+          order.phone,
+          'Update on your order #' + order.id + ':\nProduct: ' + order.product + '\nStatus: ' + status.toUpperCase() +
+          '\n\nThank you for choosing Laitor! - Laitor Team'
+        );
+        reply = 'Order #' + cmd.id + ' updated to ' + status;
+      } else {
+        reply = 'Order #' + cmd.id + ' not found';
+      }
+    }
+  }
+
+  return reply;
+};
+
 const process = async (msg) => {
   const { phone, name, text, msgId, raw } = msg;
   logger.info('Orchestrator processing message', { phone, msgId });
 
-  // 1. Log inbound message
   await logMessage({ phone, direction: 'in', text, raw, msgId });
 
-  // 2. Upsert customer in local DB
-  let customer;
+  const cmd = parseAdminCommand(text);
+  if (cmd) {
+    const adminReply = await handleAdminCommand({ cmd, phone });
+    if (adminReply) {
+      await whatsapp.sendText(phone, adminReply);
+      return;
+    }
+  }
+
+  let customer = { id: null, phone };
   try {
     customer = await upsertCustomer(phone, name);
   } catch (err) {
     logger.error('Customer upsert failed', { phone, error: err.message });
-    // Continue — don't drop the message
-    customer = { id: null, phone };
   }
 
-  // 3. Load session
   const sess = await session.get(phone);
+  const currentState = sess.state || STATES.IDLE;
 
-  // 4. Classify intent
-  const { intent, confidence, matched } = classify(text);
-  logger.info('Intent classified', { phone, intent, confidence, matched });
-
-  // 5. Update session with latest intent
-  await session.set(phone, { lastIntent: intent, lastMessage: text, customerId: customer.id });
-
-  // 6. Route by intent
-  let replies = REPLIES[intent] || REPLIES[INTENTS.GENERAL_INQUIRY];
+  let replies = REPLIES.GENERAL;
+  let nextState = STATES.IDLE;
 
   try {
-    switch (intent) {
-      case INTENTS.INTERNET_LEAD:
-      case INTENTS.PRODUCT_ORDER: {
-        // Upsert CRM person
-        const crmPersonId = await crm.upsertPerson({ phone, name });
+    if (currentState === STATES.AWAITING_PRODUCT) {
+      const result = await handleProductOrderComplete({ customer, text, name, phone });
+      replies = result.replies;
+      nextState = result.nextState;
 
-        if (customer.id) {
-          // Update CRM id on customer record
-          await query('UPDATE customers SET crm_id = $1 WHERE id = $2', [crmPersonId, customer.id]);
-        }
-
-        // Create CRM lead
-        const crmLeadId = crmPersonId
-          ? await crm.createLead({ crmPersonId, type: intent, notes: text })
-          : null;
-
-        // Log in local DB
-        if (customer.id) {
-          await createLocalLead(customer.id, intent, text, crmLeadId);
-        }
-
-        // Log inbound activity in CRM
-        if (crmPersonId) {
-          await crm.logActivity({ crmPersonId, message: text, direction: 'in' });
-        }
-        break;
+    } else if (currentState === STATES.AWAITING_LOCATION) {
+      replies = REPLIES.LOCATION_RECEIVED(text);
+      if (customer.id) {
+        await query('UPDATE customers SET location = $1 WHERE id = $2', [text, customer.id]);
       }
+      nextState = STATES.IDLE;
 
-      case INTENTS.SUPPORT_REQUEST: {
-        // Create ticket in local DB
-        if (customer.id) {
-          const ticketId = await createLocalTicket(customer.id, text);
-          logger.info('Support ticket created', { ticketId, phone });
-        }
+    } else {
+      const { intent, confidence, matched } = classify(text);
+      logger.info('Intent classified', { phone, intent, confidence, matched });
 
-        // Optionally create CRM lead for support (for tracking)
-        const crmPersonId = await crm.upsertPerson({ phone, name });
-        if (crmPersonId) {
-          await crm.createLead({ crmPersonId, type: intent, notes: text });
-          await crm.logActivity({ crmPersonId, message: text, direction: 'in' });
+      switch (intent) {
+        case INTENTS.INTERNET_LEAD: {
+          const result = await handleInternetLead({ customer, text, name, phone });
+          replies = result.replies;
+          nextState = result.nextState;
+          break;
         }
-        break;
+        case INTENTS.PRODUCT_ORDER: {
+          const result = await handleProductOrderStart();
+          replies = result.replies;
+          nextState = result.nextState;
+          break;
+        }
+        case INTENTS.SUPPORT_REQUEST: {
+          const result = await handleSupportRequest({ customer, text, name, phone });
+          replies = result.replies;
+          nextState = result.nextState;
+          break;
+        }
+        default:
+          replies = REPLIES.GENERAL;
+          nextState = STATES.IDLE;
+          break;
       }
-
-      case INTENTS.GENERAL_INQUIRY:
-      default:
-        // No DB / CRM action for general inquiries — just reply
-        break;
     }
   } catch (err) {
-    logger.error('Orchestrator route handler error', { intent, phone, error: err.message });
-    // Still send a reply — don't leave customer hanging
+    logger.error('Orchestrator handler error', { phone, error: err.message });
+    replies = ['We encountered an issue. Please try again or call us directly.'];
+    nextState = STATES.IDLE;
   }
 
-  // 7. Send WhatsApp replies
+  await session.set(phone, { state: nextState, lastMessage: text, customerId: customer.id });
+
   try {
     await whatsapp.sendSequence(phone, replies);
-    // Log each outbound message
     for (const r of replies) {
-      await logMessage({ phone, direction: 'out', text: r, raw: { automated: true }, msgId: `out-${msgId}-${Date.now()}` });
+      await logMessage({
+        phone,
+        direction: 'out',
+        text: r,
+        raw: { automated: true },
+        msgId: 'out-' + msgId + '-' + Date.now(),
+      });
     }
   } catch (err) {
     logger.error('Failed to send WhatsApp reply', { phone, error: err.message });
   }
 
-  logger.info('Orchestrator done', { phone, intent });
+  logger.info('Orchestrator done', { phone, nextState });
 };
 
 module.exports = { process };
