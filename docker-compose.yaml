@@ -7,19 +7,21 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "3000:3000"
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
-      EVOLUTION_API_URL: ${EVOLUTION_API_URL}
-      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      # Internal — wired directly to sibling services, no manual config needed
+      DATABASE_URL: postgresql://laitor:laitor_secret@postgres:5432/laitor
+      REDIS_URL: redis://redis:6379
+      # External — set these in Coolify Environment Variables
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL:-}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
       EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE:-laitor}
-      CRM_URL: ${CRM_URL}
-      CRM_API_KEY: ${CRM_API_KEY}
-      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
-      ADMIN_PHONES: ${ADMIN_PHONES}
+      CRM_URL: ${CRM_URL:-}
+      CRM_API_KEY: ${CRM_API_KEY:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-changeme}
+      ADMIN_PHONES: ${ADMIN_PHONES:-}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-3600}
     depends_on:
       postgres:
@@ -28,6 +30,8 @@ services:
         condition: service_healthy
     volumes:
       - logs:/app/logs
+    networks:
+      - laitor_internal
 
   postgres:
     image: postgres:16-alpine
@@ -35,14 +39,16 @@ services:
     environment:
       POSTGRES_DB: laitor
       POSTGRES_USER: laitor
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: laitor_secret
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U laitor -d laitor"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+    networks:
+      - laitor_internal
 
   redis:
     image: redis:7-alpine
@@ -52,11 +58,17 @@ services:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+    networks:
+      - laitor_internal
 
 volumes:
   postgres_data:
   redis_data:
   logs:
+
+networks:
+  laitor_internal:
+    driver: bridge
