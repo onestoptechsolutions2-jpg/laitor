@@ -5,7 +5,9 @@ const { Pool } = require('pg');
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://laitor:laitor_secret@postgres:5432/laitor';
 
-console.log('[migrate] Connecting to:', DATABASE_URL.replace(/:([^:@]+)@/, ':***@'));
+console.log('[migrate] DATABASE_URL:', DATABASE_URL.replace(/:([^:@]+)@/, ':***@'));
+console.log('[migrate] Node version:', process.version);
+console.log('[migrate] pg version:', require('pg/package.json').version);
 
 const pool = new Pool({ connectionString: DATABASE_URL, connectionTimeoutMillis: 10000 });
 
