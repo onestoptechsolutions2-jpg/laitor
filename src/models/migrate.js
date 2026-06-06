@@ -79,7 +79,14 @@ CREATE INDEX IF NOT EXISTS idx_tickets_customer  ON tickets(customer_id);
     await pool.query(schema);
     logger.info('Migration complete.');
   } catch (err) {
-    logger.error('Migration failed', { error: err.message });
+    logger.error('Migration failed', {
+      message: err.message,
+      code:    err.code,
+      detail:  err.detail,
+      hint:    err.hint,
+      stack:   err.stack,
+    });
+    console.error('[migrate] FULL ERROR:', err);
     process.exit(1);
   } finally {
     await pool.end();
