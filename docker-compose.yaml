@@ -1,7 +1,15 @@
 version: '3.9'
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LAITOR WHATSAPP ENGINE — Self-contained stack
+# Only 4 env vars needed: EVOLUTION_API_URL, EVOLUTION_API_KEY,
+#                          ADMIN_PHONES, WEBHOOK_SECRET
+# Everything else (DB, Redis) is wired internally.
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
-  app:
+
+  laitor_app:
     build:
       context: .
       dockerfile: Dockerfile
@@ -11,13 +19,64 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
+      # Internal — hardwired to sibling services
+      DATABASE_URL: postgresql://laitor:laitor2024@laitor_db:5432/laitor
+      REDIS_URL: redis://laitor_cache:6379
+      # External — set these 4 in Coolify environment variables
       EVOLUTION_API_URL: ${EVOLUTION_API_URL:-}
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
       EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE:-laitor}
       CRM_URL: ${CRM_URL:-}
       CRM_API_KEY: ${CRM_API_KEY:-}
-      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-changeme}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-laitor_webhook_secret}
       ADMIN_PHONES: ${ADMIN_PHONES:-}
-      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-3600}
+      SESSION_TTL_SECONDS: 3600
+    depends_on:
+      laitor_db:
+        condition: service_healthy
+      laitor_cache:
+        condition: service_healthy
+    volumes:
+      - laitor_logs:/app/logs
+    networks:
+      - laitor_net
+
+  laitor_db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: laitor
+      POSTGRES_USER: laitor
+      POSTGRES_PASSWORD: laitor2024
+    volumes:
+      - laitor_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U laitor -d laitor"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - laitor_net
+
+  laitor_cache:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - laitor_cache_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - laitor_net
+
+volumes:
+  laitor_db_data:
+  laitor_cache_data:
+  laitor_logs:
+
+networks:
+  laitor_net:
+    driver: bridge
