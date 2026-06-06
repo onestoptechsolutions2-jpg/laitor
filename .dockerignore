@@ -6,3 +6,5 @@ logs
 .gitignore
 *.md
 docker-compose*.yml
+docker-compose*.yaml
+package-lock.json

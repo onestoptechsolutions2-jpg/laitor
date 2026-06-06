@@ -6,7 +6,7 @@ RUN apk add --no-cache postgresql-client
 WORKDIR /app
 
 # Install dependencies (cached layer)
-COPY package*.json ./
+COPY package.json ./
 RUN npm install --omit=dev
 
 # Copy source
