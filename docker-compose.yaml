@@ -11,10 +11,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      # Internal — wired directly to sibling services, no manual config needed
-      DATABASE_URL: postgresql://laitor:laitor_secret@postgres:5432/laitor
-      REDIS_URL: redis://redis:6379
-      # External — set these in Coolify Environment Variables
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
       EVOLUTION_API_URL: ${EVOLUTION_API_URL:-}
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
       EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE:-laitor}
@@ -23,52 +21,3 @@ services:
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-changeme}
       ADMIN_PHONES: ${ADMIN_PHONES:-}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-3600}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - logs:/app/logs
-    networks:
-      - laitor_internal
-
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: laitor
-      POSTGRES_USER: laitor
-      POSTGRES_PASSWORD: laitor_secret
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U laitor -d laitor"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    networks:
-      - laitor_internal
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    networks:
-      - laitor_internal
-
-volumes:
-  postgres_data:
-  redis_data:
-  logs:
-
-networks:
-  laitor_internal:
-    driver: bridge
