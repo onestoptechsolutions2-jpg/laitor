@@ -1,4 +1,5 @@
 FROM node:20-alpine
+# cache-bust: v2
 
 # Install postgresql-client for pg_isready health check in entrypoint
 RUN apk add --no-cache postgresql-client
