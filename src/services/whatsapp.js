@@ -28,8 +28,7 @@ const client = axios.create({
 const sendText = async (phone, text, retries = 3) => {
   const payload = {
     number: phone,
-    options: { delay: 500, presence: 'composing' },
-    textMessage: { text },
+    text,
   };
 
   for (let attempt = 1; attempt <= retries; attempt++) {
