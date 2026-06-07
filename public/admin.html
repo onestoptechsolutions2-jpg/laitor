@@ -262,16 +262,51 @@
     <!-- Catalog -->
     <section id="catalog" class="section">
       <div class="topbar"><h1>Product Catalog</h1>
-        <button class="btn btn-outline btn-sm" onclick="refreshCatalog()">↻ Refresh from Manager.io</button>
+        <div class="topbar-actions">
+          <button class="btn btn-outline btn-sm" onclick="refreshCatalog()">↻ Sync Manager.io</button>
+          <button class="btn btn-primary btn-sm" onclick="showAddItem()">+ Add Item</button>
+        </div>
       </div>
       <div class="content">
+        <!-- Add/Edit form -->
+        <div id="catalog-form" style="display:none;margin-bottom:20px">
+          <div class="table-wrap" style="padding:20px;max-width:520px">
+            <h2 style="margin-bottom:16px;font-size:13px" id="catalog-form-title">Add Catalog Item</h2>
+            <input type="hidden" id="cf-id">
+            <div style="display:grid;gap:12px">
+              <div>
+                <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:4px">Name *</label>
+                <input type="text" id="cf-name" placeholder="e.g. Internet 10 Mbps Home">
+              </div>
+              <div>
+                <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:4px">Type</label>
+                <select id="cf-type">
+                  <option value="internet">Internet Package</option>
+                  <option value="product">Product / Equipment</option>
+                </select>
+              </div>
+              <div>
+                <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:4px">Price (KES)</label>
+                <input type="text" id="cf-price" placeholder="e.g. 2500">
+              </div>
+              <div>
+                <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:4px">Description</label>
+                <input type="text" id="cf-desc" placeholder="Short description shown to customers">
+              </div>
+              <div style="display:flex;gap:10px">
+                <button class="btn btn-primary" onclick="saveItem()">Save</button>
+                <button class="btn btn-outline" onclick="document.getElementById('catalog-form').style.display='none'">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="pill-row" id="catalog-filters">
           <div class="pill active" onclick="filterCatalog('all',this)">All</div>
           <div class="pill" onclick="filterCatalog('internet',this)">Internet</div>
           <div class="pill" onclick="filterCatalog('product',this)">Products</div>
         </div>
         <div class="table-wrap">
-          <table><thead><tr><th>Name</th><th>Type</th><th>Price (KES)</th><th>Description</th></tr></thead>
+          <table><thead><tr><th>Name</th><th>Type</th><th>Price (KES)</th><th>Description</th><th></th></tr></thead>
           <tbody id="catalog-body"></tbody></table>
         </div>
       </div>
@@ -471,9 +506,9 @@ async function loadTickets() {
 let catalogData = [];
 async function loadCatalog() {
   try {
-    const d = await fetch(API + '/api/v1/catalog').then(r => r.json());
+    const d = await fetch(API + '/api/v1/catalog/items').then(r => r.json());
     catalogData = d.items || [];
-    renderCatalog('all');
+    renderCatalog(document.querySelector('#catalog-filters .pill.active')?.textContent?.toLowerCase() || 'all');
   } catch(e) { toast('Failed to load catalog', true); }
 }
 function filterCatalog(type, el) {
@@ -489,14 +524,65 @@ function renderCatalog(type) {
       <td><span class="badge ${i.type==='internet'?'badge-blue':'badge-green'}">${i.type}</span></td>
       <td>${parseFloat(i.price||0) > 0 ? 'KES ' + parseFloat(i.price).toLocaleString() : '—'}</td>
       <td style="color:var(--muted)">${i.description || '—'}</td>
-    </tr>`).join('') || '<tr><td colspan="4" style="color:var(--muted);text-align:center;padding:24px">No catalog items. Check Manager.io env vars.</td></tr>';
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="editItem(${i.id},'${i.name.replace(/'/g,"\'")}','${i.type}',${i.price||0},'${(i.description||'').replace(/'/g,"\'")}')">Edit</button>
+        <button class="btn btn-sm" style="background:rgba(239,68,68,.15);color:var(--red);border:none;margin-left:4px" onclick="deleteItem(${i.id})">Delete</button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:24px">No items yet. Click + Add Item to get started.</td></tr>';
 }
 async function refreshCatalog() {
   try {
     const d = await fetch(API + '/api/v1/catalog/refresh', { method: 'POST' }).then(r => r.json());
-    toast('Catalog refreshed — ' + d.count + ' items');
+    toast('Synced from Manager.io — ' + d.count + ' items');
     loadCatalog();
-  } catch(e) { toast('Refresh failed', true); }
+  } catch(e) { toast('Sync failed (Manager.io may not be configured)', true); }
+}
+function showAddItem() {
+  document.getElementById('catalog-form-title').textContent = 'Add Catalog Item';
+  document.getElementById('cf-id').value = '';
+  document.getElementById('cf-name').value = '';
+  document.getElementById('cf-type').value = 'internet';
+  document.getElementById('cf-price').value = '';
+  document.getElementById('cf-desc').value = '';
+  document.getElementById('catalog-form').style.display = 'block';
+}
+function editItem(id, name, type, price, desc) {
+  document.getElementById('catalog-form-title').textContent = 'Edit Catalog Item';
+  document.getElementById('cf-id').value = id;
+  document.getElementById('cf-name').value = name;
+  document.getElementById('cf-type').value = type;
+  document.getElementById('cf-price').value = price;
+  document.getElementById('cf-desc').value = desc;
+  document.getElementById('catalog-form').style.display = 'block';
+  document.getElementById('catalog-form').scrollIntoView({ behavior: 'smooth' });
+}
+async function saveItem() {
+  const id = document.getElementById('cf-id').value;
+  const body = {
+    name:        document.getElementById('cf-name').value.trim(),
+    type:        document.getElementById('cf-type').value,
+    price:       document.getElementById('cf-price').value,
+    description: document.getElementById('cf-desc').value.trim(),
+  };
+  if (!body.name) { toast('Name is required', true); return; }
+  const url    = id ? API + '/api/v1/catalog/items/' + id : API + '/api/v1/catalog/items';
+  const method = id ? 'PUT' : 'POST';
+  try {
+    const d = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+    if (d.success) {
+      toast(id ? 'Item updated' : 'Item added');
+      document.getElementById('catalog-form').style.display = 'none';
+      loadCatalog();
+    } else { toast(d.error, true); }
+  } catch(e) { toast('Save failed', true); }
+}
+async function deleteItem(id) {
+  if (!confirm('Delete this catalog item?')) return;
+  try {
+    await fetch(API + '/api/v1/catalog/items/' + id, { method: 'DELETE' });
+    toast('Item deleted');
+    loadCatalog();
+  } catch(e) { toast('Delete failed', true); }
 }
 
 // ── Outreach ──────────────────────────────────────────────────────────────────

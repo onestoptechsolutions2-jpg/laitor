@@ -179,3 +179,46 @@ router.get('/outreach/pending', async (req, res) => {
 });
 
 module.exports = router;
+
+// ── Manual catalog management ─────────────────────────────────────────────────
+
+router.get('/catalog/items', async (_req, res) => {
+  try {
+    const r = await query(`SELECT * FROM catalog_cache ORDER BY type, name`);
+    return res.json({ items: r.rows });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+router.post('/catalog/items', async (req, res) => {
+  const { name, description, price, type } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  const itemKey = name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + Date.now();
+  try {
+    const r = await query(
+      `INSERT INTO catalog_cache (item_key, name, description, price, type, cached_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       RETURNING *`,
+      [itemKey, name.trim(), description || null, parseFloat(price) || 0, type || 'product']
+    );
+    return res.json({ success: true, item: r.rows[0] });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/catalog/items/:id', async (req, res) => {
+  try {
+    await query(`DELETE FROM catalog_cache WHERE id = $1`, [req.params.id]);
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+router.put('/catalog/items/:id', async (req, res) => {
+  const { name, description, price, type } = req.body || {};
+  try {
+    const r = await query(
+      `UPDATE catalog_cache SET name=$1, description=$2, price=$3, type=$4, cached_at=NOW()
+       WHERE id=$5 RETURNING *`,
+      [name, description || null, parseFloat(price) || 0, type || 'product', req.params.id]
+    );
+    return res.json({ success: true, item: r.rows[0] });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
