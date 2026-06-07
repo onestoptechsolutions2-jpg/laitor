@@ -1,47 +1,34 @@
 'use strict';
 
-const { query } = require('../models/db');
-const session = require('../services/session');
-const { classify, INTENTS } = require('../services/intent');
-const whatsapp = require('../services/whatsapp');
-const crm = require('../services/crm');
-const orderService = require('../services/order');
+const { query }   = require('../models/db');
+const session     = require('../services/session');
+const whatsapp    = require('../services/whatsapp');
+const crm         = require('../services/crm');
+const consent     = require('../services/consent');
+const catalog     = require('../services/catalog');
+const menu        = require('../services/menu');
+const orderService  = require('../services/order');
 const ticketService = require('../services/ticket');
-const admin = require('../services/admin');
-const manager = require('../services/manager');
-const logger = require('../utils/logger');
+const admin       = require('../services/admin');
+const manager     = require('../services/manager');
+const logger      = require('../utils/logger');
+
+// ─── States ───────────────────────────────────────────────────────────────────
 
 const STATES = {
-  IDLE:              'IDLE',
-  AWAITING_PRODUCT:  'AWAITING_PRODUCT',
-  AWAITING_LOCATION: 'AWAITING_LOCATION',
+  CONSENT_PENDING:     'CONSENT_PENDING',     // waiting for opt-in/opt-out reply
+  MAIN_MENU:           'MAIN_MENU',           // showing main menu
+  INTERNET_BROWSE:     'INTERNET_BROWSE',     // browsing internet packages
+  PRODUCT_BROWSE:      'PRODUCT_BROWSE',      // browsing products
+  INTERNET_CONFIRM:    'INTERNET_CONFIRM',    // confirming selected internet package
+  PRODUCT_CONFIRM:     'PRODUCT_CONFIRM',     // confirming selected product
+  SUPPORT_AWAIT:       'SUPPORT_AWAIT',       // waiting for support description
+  AGENT_HANDOFF:       'AGENT_HANDOFF',       // handed off to human agent
 };
 
-const REPLIES = {
-  INTERNET_LEAD_ACK: [
-    'Laitor Invest - Internet Enquiry Received!',
-    'Our sales team will contact you shortly.\n\nCould you share your location (area/estate)?',
-  ],
-  PRODUCT_ORDER_ASK: [
-    'Great! Let us get your order started.',
-    'What product are you looking for? (e.g. CCTV camera, router, network cable)\n\nAlso include the quantity if you know it.',
-  ],
-  PRODUCT_ORDER_ACK: (product) => [
-    'Order received for: ' + product,
-    'Our team has been notified and will confirm your order and pricing shortly.',
-  ],
-  SUPPORT_ACK: [
-    'Support ticket logged!',
-    'Our technical team has been notified and will reach out to you shortly.',
-  ],
-  GENERAL: [
-    'Hello! Welcome to Laitor Invest.',
-    'How can we help you today?\n\nInternet packages - type "internet" or "wifi"\nProducts & orders - type "buy" or "order"\nTechnical support - type "not working" or "support"',
-  ],
-  LOCATION_RECEIVED: (location) => [
-    'Got it - ' + location + '. Our team will be in touch shortly to confirm coverage and package options.',
-  ],
-};
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const upsertCustomer = async (phone, name) => {
   const res = await query(
@@ -64,79 +51,24 @@ const logMessage = async ({ phone, direction, text, raw, msgId }) => {
       [phone, direction, text, JSON.stringify(raw), msgId]
     );
   } catch (err) {
-    logger.warn('Message log failed (non-fatal)', { error: err.message });
+    logger.warn('Message log failed', { error: err.message });
   }
 };
 
-const createLocalLead = async (customerId, type, notes, crmLeadId) => {
-  const res = await query(
-    `INSERT INTO leads (customer_id, type, notes, crm_lead_id)
-     VALUES ($1, $2, $3, $4) RETURNING id`,
-    [customerId, type, notes, crmLeadId]
-  );
-  return res.rows[0].id;
+const syncToCRM = async ({ phone, name, type, notes }) => {
+  try {
+    const crmPersonId = await crm.upsertPerson({ phone, name });
+    if (!crmPersonId) return null;
+    const crmLeadId = await crm.createLead({ crmPersonId, type, notes });
+    await crm.logActivity({ crmPersonId, message: notes || type, direction: 'in' });
+    return { crmPersonId, crmLeadId };
+  } catch (err) {
+    logger.warn('CRM sync failed (non-fatal)', { error: err.message });
+    return null;
+  }
 };
 
-const handleInternetLead = async ({ customer, text, name, phone }) => {
-  const crmPersonId = await crm.upsertPerson({ phone, name });
-  if (crmPersonId && customer.id) {
-    await query('UPDATE customers SET crm_id = $1 WHERE id = $2', [crmPersonId, customer.id]);
-  }
-  const crmLeadId = crmPersonId
-    ? await crm.createLead({ crmPersonId, type: INTENTS.INTERNET_LEAD, notes: text })
-    : null;
-  let leadId = null;
-  if (customer.id) {
-    leadId = await createLocalLead(customer.id, INTENTS.INTERNET_LEAD, text, crmLeadId);
-  }
-  if (crmPersonId) await crm.logActivity({ crmPersonId, message: text, direction: 'in' });
-  await admin.notifyNewLead({ leadId, phone, name, message: text });
-  return { nextState: STATES.AWAITING_LOCATION, replies: REPLIES.INTERNET_LEAD_ACK };
-};
-
-const handleProductOrderStart = async () => {
-  return { nextState: STATES.AWAITING_PRODUCT, replies: REPLIES.PRODUCT_ORDER_ASK };
-};
-
-const handleProductOrderComplete = async ({ customer, text, name, phone }) => {
-  let order = null;
-  if (customer.id) {
-    order = await orderService.create({ customerId: customer.id, product: text, notes: text });
-  }
-  const crmPersonId = await crm.upsertPerson({ phone, name });
-  if (crmPersonId) {
-    await crm.createLead({ crmPersonId, type: INTENTS.PRODUCT_ORDER, notes: text });
-    await crm.logActivity({ crmPersonId, message: text, direction: 'in' });
-  }
-  await admin.notifyNewOrder({
-    orderId: order ? order.id : '?',
-    phone,
-    name,
-    product: text,
-    notes: text,
-  });
-  return { nextState: STATES.IDLE, replies: REPLIES.PRODUCT_ORDER_ACK(text) };
-};
-
-const handleSupportRequest = async ({ customer, text, name, phone }) => {
-  let ticket = null;
-  if (customer.id) {
-    ticket = await ticketService.create({ customerId: customer.id, issue: text });
-  }
-  const crmPersonId = await crm.upsertPerson({ phone, name });
-  if (crmPersonId) {
-    await crm.createLead({ crmPersonId, type: INTENTS.SUPPORT_REQUEST, notes: text });
-    await crm.logActivity({ crmPersonId, message: text, direction: 'in' });
-  }
-  await admin.notifyNewTicket({
-    ticketId: ticket ? ticket.id : '?',
-    phone,
-    name,
-    issue: text,
-    priority: ticket ? ticket.priority : 'medium',
-  });
-  return { nextState: STATES.IDLE, replies: REPLIES.SUPPORT_ACK };
-};
+// ─── Admin command handler (unchanged from v1) ────────────────────────────────
 
 const parseAdminCommand = (text) => {
   const match = text.trim().match(/^(TICKET|ORDER)#(\d+)\s+(\w+)(?:\s+(.+))?$/i);
@@ -190,20 +122,10 @@ const handleAdminCommand = async ({ cmd, phone }) => {
     if (status) {
       const order = await orderService.updateStatus(cmd.id, status);
       if (order) {
-        // Create invoice in Manager.io when order is confirmed
         if (status === orderService.ORDER_STATUS.CONFIRMED) {
-          const customerKey = await manager.upsertCustomer({
-            phone: order.phone,
-            name: order.phone,
-          });
-          await manager.createInvoice({
-            customerKey,
-            orderId: order.id,
-            product: order.product,
-            phone: order.phone,
-          });
+          const customerKey = await manager.upsertCustomer({ phone: order.phone, name: order.phone });
+          await manager.createInvoice({ customerKey, orderId: order.id, product: order.product, phone: order.phone });
         }
-
         await whatsapp.sendText(
           order.phone,
           'Update on your order #' + order.id + ':\nProduct: ' + order.product + '\nStatus: ' + status.toUpperCase() +
@@ -219,12 +141,271 @@ const handleAdminCommand = async ({ cmd, phone }) => {
   return reply;
 };
 
+// ─── State handlers ───────────────────────────────────────────────────────────
+
+/**
+ * STEP 1 — Consent gate.
+ * New contacts always get the consent message first.
+ * On reply: 1/yes → give consent, show main menu.
+ *           2/no/stop → deny consent, send opt-out confirmation.
+ */
+const handleConsentState = async ({ customer, text, phone }) => {
+  const consentReply = consent.parseConsentReply(text);
+
+  if (consentReply === consent.CONSENT_STATUS.GIVEN) {
+    await consent.giveConsent(phone);
+    // Update customer in DB
+    await query(
+      `UPDATE customers SET consent_status = 'given', consented_at = NOW() WHERE phone = $1`,
+      [phone]
+    );
+    // Show main menu after a short welcome
+    const name = customer.name || 'there';
+    return {
+      nextState: STATES.MAIN_MENU,
+      replies: [
+        `Thank you, ${name}! You are now connected to *Laitor Invest*. 🎉`,
+        ...menu.MAIN_MENU,
+      ],
+    };
+  }
+
+  if (consentReply === consent.CONSENT_STATUS.DENIED) {
+    await consent.denyConsent(phone);
+    await query(
+      `UPDATE customers SET consent_status = 'denied' WHERE phone = $1`,
+      [phone]
+    );
+    return {
+      nextState: STATES.CONSENT_PENDING,
+      replies: menu.OPT_OUT_CONFIRM,
+    };
+  }
+
+  // Unrecognised reply — resend consent message
+  return {
+    nextState: STATES.CONSENT_PENDING,
+    replies: [
+      'Please reply *1* to accept or *2* to opt out.',
+    ],
+  };
+};
+
+/**
+ * STEP 2 — Main menu navigation.
+ * 1 → Internet packages
+ * 2 → Products
+ * 3 → Support
+ * 4 → Agent
+ */
+const handleMainMenu = async ({ text }) => {
+  const choice = text.trim().replace(/[^0-9]/g, '');
+
+  if (choice === '1') {
+    const cat = await catalog.getCatalog();
+    const internet = catalog.splitByType(cat).internet;
+    return {
+      nextState: STATES.INTERNET_BROWSE,
+      replies: menu.buildInternetMenu(internet),
+      sessionData: { catalogInternet: internet },
+    };
+  }
+
+  if (choice === '2') {
+    const cat = await catalog.getCatalog();
+    const products = catalog.splitByType(cat).products;
+    return {
+      nextState: STATES.PRODUCT_BROWSE,
+      replies: menu.buildProductMenu(products),
+      sessionData: { catalogProducts: products },
+    };
+  }
+
+  if (choice === '3') {
+    return {
+      nextState: STATES.SUPPORT_AWAIT,
+      replies: menu.SUPPORT_PROMPT,
+    };
+  }
+
+  if (choice === '4') {
+    return {
+      nextState: STATES.AGENT_HANDOFF,
+      replies: menu.AGENT_HANDOFF,
+    };
+  }
+
+  // Unrecognised — re-show menu
+  return {
+    nextState: STATES.MAIN_MENU,
+    replies: ['Please reply with a number:\n\n' + menu.MAIN_MENU[1]],
+  };
+};
+
+/**
+ * STEP 3a — Internet package browse.
+ * User replies with a number to select, or 0 to go back.
+ */
+const handleInternetBrowse = async ({ text, customer, phone, name, sess }) => {
+  const choice = parseInt(text.trim(), 10);
+
+  if (choice === 0 || text.toLowerCase() === 'menu') {
+    return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+  }
+
+  // Re-fetch catalog if not in session
+  let items = sess.catalogInternet;
+  if (!items) {
+    const cat = await catalog.getCatalog();
+    items = catalog.splitByType(cat).internet;
+  }
+
+  const selected = catalog.getByIndex(items, choice);
+  if (!selected) {
+    return {
+      nextState: STATES.INTERNET_BROWSE,
+      replies: [
+        `Please reply with a number between 1 and ${items.length}, or *0* to go back.`,
+      ],
+      sessionData: { catalogInternet: items },
+    };
+  }
+
+  return {
+    nextState: STATES.INTERNET_CONFIRM,
+    replies: menu.buildConfirmMenu(selected.name, selected.price),
+    sessionData: { pendingItem: selected, catalogInternet: items },
+  };
+};
+
+/**
+ * STEP 3b — Product browse.
+ */
+const handleProductBrowse = async ({ text, customer, phone, name, sess }) => {
+  const choice = parseInt(text.trim(), 10);
+
+  if (choice === 0 || text.toLowerCase() === 'menu') {
+    return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+  }
+
+  let items = sess.catalogProducts;
+  if (!items) {
+    const cat = await catalog.getCatalog();
+    items = catalog.splitByType(cat).products;
+  }
+
+  const selected = catalog.getByIndex(items, choice);
+  if (!selected) {
+    return {
+      nextState: STATES.PRODUCT_BROWSE,
+      replies: [
+        `Please reply with a number between 1 and ${items.length}, or *0* to go back.`,
+      ],
+      sessionData: { catalogProducts: items },
+    };
+  }
+
+  return {
+    nextState: STATES.PRODUCT_CONFIRM,
+    replies: menu.buildConfirmMenu(selected.name, selected.price),
+    sessionData: { pendingItem: selected, catalogProducts: items },
+  };
+};
+
+/**
+ * STEP 4 — Confirm order (internet or product).
+ */
+const handleConfirm = async ({ text, customer, phone, name, sess, orderType }) => {
+  const choice = text.trim().replace(/[^0-9]/g, '');
+
+  if (choice === '2' || text.toLowerCase() === 'cancel') {
+    const browseState = orderType === 'internet' ? STATES.INTERNET_BROWSE : STATES.PRODUCT_BROWSE;
+    const items = orderType === 'internet' ? sess.catalogInternet : sess.catalogProducts;
+    const browseMenu = orderType === 'internet'
+      ? menu.buildInternetMenu(items || [])
+      : menu.buildProductMenu(items || []);
+    return { nextState: browseState, replies: browseMenu };
+  }
+
+  if (choice === '1') {
+    const item = sess.pendingItem;
+    if (!item) {
+      return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+    }
+
+    // Create order
+    let order = null;
+    if (customer.id) {
+      order = await orderService.create({ customerId: customer.id, product: item.name, notes: item.name });
+    }
+
+    // Sync to CRM
+    await syncToCRM({ phone, name, type: orderType === 'internet' ? 'INTERNET_LEAD' : 'PRODUCT_ORDER', notes: item.name });
+
+    // Notify admin
+    await admin.notifyNewOrder({
+      orderId: order ? order.id : '?',
+      phone,
+      name,
+      product: item.name,
+      notes: `Selected from catalog via WhatsApp. Price: KES ${item.price || 'TBD'}`,
+    });
+
+    logger.info('Order placed from catalog', { phone, item: item.name, orderId: order?.id });
+
+    return {
+      nextState: STATES.MAIN_MENU,
+      replies: [
+        `✅ Order confirmed for: *${item.name}*\n\nOur team will reach out to you shortly to arrange delivery or installation.\n\nOrder reference: *#${order?.id || 'WA-' + Date.now()}*`,
+        'Is there anything else we can help you with?\n\n' + menu.MAIN_MENU[1],
+      ],
+    };
+  }
+
+  // Unrecognised
+  return {
+    nextState: orderType === 'internet' ? STATES.INTERNET_CONFIRM : STATES.PRODUCT_CONFIRM,
+    replies: ['Please reply *1* to confirm or *2* to cancel.'],
+  };
+};
+
+/**
+ * STEP 5 — Support: capture issue description, create ticket.
+ */
+const handleSupportAwait = async ({ text, customer, phone, name }) => {
+  let ticket = null;
+  if (customer.id) {
+    ticket = await ticketService.create({ customerId: customer.id, issue: text });
+  }
+
+  await syncToCRM({ phone, name, type: 'SUPPORT_REQUEST', notes: text });
+
+  await admin.notifyNewTicket({
+    ticketId: ticket ? ticket.id : '?',
+    phone,
+    name,
+    issue: text,
+    priority: ticket ? ticket.priority : 'medium',
+  });
+
+  return {
+    nextState: STATES.MAIN_MENU,
+    replies: [
+      `✅ Support ticket *#${ticket?.id || '?'}* logged.\n\nOur technical team has been notified and will reach out to you shortly.`,
+      'Is there anything else we can help you with?\n\n' + menu.MAIN_MENU[1],
+    ],
+  };
+};
+
+// ─── Main process function ────────────────────────────────────────────────────
+
 const process = async (msg) => {
   const { phone, name, text, msgId, raw } = msg;
-  logger.info('Orchestrator processing message', { phone, msgId });
+  logger.info('Orchestrator processing', { phone, msgId });
 
   await logMessage({ phone, direction: 'in', text, raw, msgId });
 
+  // Admin commands bypass all state
   const cmd = parseAdminCommand(text);
   if (cmd) {
     const adminReply = await handleAdminCommand({ cmd, phone });
@@ -234,6 +415,17 @@ const process = async (msg) => {
     }
   }
 
+  // Global opt-out keyword
+  if (/^stop$/i.test(text.trim())) {
+    await consent.denyConsent(phone);
+    await query(`UPDATE customers SET consent_status = 'denied' WHERE phone = $1`, [phone]);
+    await whatsapp.sendSequence(phone, menu.OPT_OUT_CONFIRM);
+    return;
+  }
+
+  // Global menu reset keyword
+  const wantsMenu = /^(menu|hi|hello|hujambo|habari|start)$/i.test(text.trim());
+
   let customer = { id: null, phone };
   try {
     customer = await upsertCustomer(phone, name);
@@ -241,65 +433,92 @@ const process = async (msg) => {
     logger.error('Customer upsert failed', { phone, error: err.message });
   }
 
-  const sess = await session.get(phone);
-  const currentState = sess.state || STATES.IDLE;
+  const consentStatus = customer.consent_status || 'pending';
 
-  let replies = REPLIES.GENERAL;
-  let nextState = STATES.IDLE;
-
-  try {
-    if (currentState === STATES.AWAITING_PRODUCT) {
-      const result = await handleProductOrderComplete({ customer, text, name, phone });
-      replies = result.replies;
-      nextState = result.nextState;
-
-    } else if (currentState === STATES.AWAITING_LOCATION) {
-      replies = REPLIES.LOCATION_RECEIVED(text);
-      if (customer.id) {
-        await query('UPDATE customers SET location = $1 WHERE id = $2', [text, customer.id]);
-      }
-      nextState = STATES.IDLE;
-
-    } else {
-      const { intent, confidence, matched } = classify(text);
-      logger.info('Intent classified', { phone, intent, confidence, matched });
-
-      switch (intent) {
-        case INTENTS.INTERNET_LEAD: {
-          const result = await handleInternetLead({ customer, text, name, phone });
-          replies = result.replies;
-          nextState = result.nextState;
-          break;
-        }
-        case INTENTS.PRODUCT_ORDER: {
-          const result = await handleProductOrderStart();
-          replies = result.replies;
-          nextState = result.nextState;
-          break;
-        }
-        case INTENTS.SUPPORT_REQUEST: {
-          const result = await handleSupportRequest({ customer, text, name, phone });
-          replies = result.replies;
-          nextState = result.nextState;
-          break;
-        }
-        default:
-          replies = REPLIES.GENERAL;
-          nextState = STATES.IDLE;
-          break;
-      }
+  // ── Consent gate: if not given, only handle consent replies ─────────────────
+  if (consentStatus !== 'given') {
+    if (consentStatus === 'denied') {
+      // Silently ignore — they opted out
+      logger.info('Message from opted-out contact ignored', { phone });
+      return;
     }
-  } catch (err) {
-    logger.error('Orchestrator handler error', { phone, error: err.message });
-    replies = ['We encountered an issue. Please try again or call us directly.'];
-    nextState = STATES.IDLE;
+
+    // pending — send consent request if first contact, or handle consent reply
+    const sess = await session.get(phone);
+
+    if (!sess.consentSent) {
+      // First message — send consent request
+      await whatsapp.sendSequence(phone, consent.CONSENT_MESSAGE);
+      await session.set(phone, { ...sess, state: STATES.CONSENT_PENDING, consentSent: true, customerId: customer.id });
+    } else {
+      // They replied to consent message
+      const result = await handleConsentState({ customer, text, phone });
+      await session.set(phone, { state: result.nextState, customerId: customer.id, ...(result.sessionData || {}) });
+      await whatsapp.sendSequence(phone, result.replies);
+    }
+
+    return;
   }
 
-  await session.set(phone, { state: nextState, lastMessage: text, customerId: customer.id });
+  // ── Consent given — run state machine ───────────────────────────────────────
+  const sess = await session.get(phone);
+  const currentState = sess.state || STATES.MAIN_MENU;
+
+  let result;
 
   try {
-    await whatsapp.sendSequence(phone, replies);
-    for (const r of replies) {
+    if (wantsMenu) {
+      result = { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+
+    } else if (currentState === STATES.MAIN_MENU) {
+      result = await handleMainMenu({ text });
+
+    } else if (currentState === STATES.INTERNET_BROWSE) {
+      result = await handleInternetBrowse({ text, customer, phone, name, sess });
+
+    } else if (currentState === STATES.PRODUCT_BROWSE) {
+      result = await handleProductBrowse({ text, customer, phone, name, sess });
+
+    } else if (currentState === STATES.INTERNET_CONFIRM) {
+      result = await handleConfirm({ text, customer, phone, name, sess, orderType: 'internet' });
+
+    } else if (currentState === STATES.PRODUCT_CONFIRM) {
+      result = await handleConfirm({ text, customer, phone, name, sess, orderType: 'product' });
+
+    } else if (currentState === STATES.SUPPORT_AWAIT) {
+      result = await handleSupportAwait({ text, customer, phone, name });
+
+    } else if (currentState === STATES.AGENT_HANDOFF) {
+      // In agent handoff — just log, don't auto-reply
+      logger.info('Message in agent handoff state (not auto-replied)', { phone });
+      return;
+
+    } else {
+      // Unknown state — reset to main menu
+      result = { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+    }
+  } catch (err) {
+    logger.error('Orchestrator handler error', { phone, error: err.message, stack: err.stack });
+    result = {
+      nextState: STATES.MAIN_MENU,
+      replies: ['We encountered an issue. Please try again.\n\nType *MENU* to return to the main menu.'],
+    };
+  }
+
+  // Merge session data
+  const newSess = {
+    ...sess,
+    state: result.nextState,
+    lastMessage: text,
+    customerId: customer.id,
+    ...(result.sessionData || {}),
+  };
+  await session.set(phone, newSess);
+
+  // Send replies
+  try {
+    await whatsapp.sendSequence(phone, result.replies);
+    for (const r of result.replies) {
       await logMessage({
         phone,
         direction: 'out',
@@ -312,7 +531,7 @@ const process = async (msg) => {
     logger.error('Failed to send WhatsApp reply', { phone, error: err.message });
   }
 
-  logger.info('Orchestrator done', { phone, nextState });
+  logger.info('Orchestrator done', { phone, nextState: result.nextState });
 };
 
 module.exports = { process };

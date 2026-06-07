@@ -11,14 +11,20 @@ const pool = new Pool({ connectionString: DATABASE_URL, connectionTimeoutMillis:
 
 const schema = `
 CREATE TABLE IF NOT EXISTS customers (
-  id         SERIAL PRIMARY KEY,
-  phone      VARCHAR(20) UNIQUE NOT NULL,
-  name       VARCHAR(255),
-  location   VARCHAR(255),
-  tags       TEXT[],
-  crm_id     VARCHAR(255),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  id              SERIAL PRIMARY KEY,
+  phone           VARCHAR(20) UNIQUE NOT NULL,
+  name            VARCHAR(255),
+  location        VARCHAR(255),
+  tags            TEXT[],
+  crm_id          VARCHAR(255),
+  consent_status  VARCHAR(20) DEFAULT 'pending',
+  consented_at    TIMESTAMPTZ,
+  source          VARCHAR(50) DEFAULT 'inbound',
+  cluster         VARCHAR(255),
+  territory       VARCHAR(255),
+  service_tag     VARCHAR(255),
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE TABLE IF NOT EXISTS leads (
   id          SERIAL PRIMARY KEY,
@@ -60,11 +66,29 @@ CREATE TABLE IF NOT EXISTS messages (
   msg_id     VARCHAR(255) UNIQUE,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_customers_phone  ON customers(phone);
-CREATE INDEX IF NOT EXISTS idx_messages_phone   ON messages(phone);
-CREATE INDEX IF NOT EXISTS idx_messages_msg_id  ON messages(msg_id);
-CREATE INDEX IF NOT EXISTS idx_leads_customer   ON leads(customer_id);
-CREATE INDEX IF NOT EXISTS idx_tickets_customer ON tickets(customer_id);
+CREATE TABLE IF NOT EXISTS catalog_cache (
+  id          SERIAL PRIMARY KEY,
+  item_key    VARCHAR(255) UNIQUE NOT NULL,
+  name        VARCHAR(255) NOT NULL,
+  description TEXT,
+  price       DECIMAL(10,2) DEFAULT 0,
+  type        VARCHAR(50) DEFAULT 'product',
+  raw         JSONB,
+  cached_at   TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS consent_status  VARCHAR(20) DEFAULT 'pending';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS consented_at   TIMESTAMPTZ;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS source         VARCHAR(50) DEFAULT 'inbound';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS cluster        VARCHAR(255);
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS territory      VARCHAR(255);
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS service_tag    VARCHAR(255);
+CREATE INDEX IF NOT EXISTS idx_customers_phone     ON customers(phone);
+CREATE INDEX IF NOT EXISTS idx_customers_consent   ON customers(consent_status);
+CREATE INDEX IF NOT EXISTS idx_messages_phone      ON messages(phone);
+CREATE INDEX IF NOT EXISTS idx_messages_msg_id     ON messages(msg_id);
+CREATE INDEX IF NOT EXISTS idx_leads_customer      ON leads(customer_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_customer    ON tickets(customer_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_type        ON catalog_cache(type);
 `;
 
 (async () => {
