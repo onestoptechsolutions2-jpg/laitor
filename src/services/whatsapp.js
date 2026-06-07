@@ -42,7 +42,7 @@ const sendText = async (phone, text, retries = 3) => {
       return res.data;
     } catch (err) {
       const status = err.response?.status;
-      logger.warn('WhatsApp send attempt failed', { phone, attempt, status, error: err.message });
+      logger.warn('WhatsApp send attempt failed', { phone, attempt, status, error: err.message, response: err.response?.data });
 
       if (attempt === retries) {
         logger.error('WhatsApp send failed after all retries', { phone });
