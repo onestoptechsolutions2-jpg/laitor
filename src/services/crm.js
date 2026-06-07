@@ -92,7 +92,7 @@ const createLead = async ({ crmPersonId, type, notes }) => {
       `mutation CreateOpportunity($name: String!, $closeDate: DateTime!, $personId: ID!) {
         createOpportunity(data: {
           name: $name
-          stage: NEW
+          stage: NEW_LEAD
           closeDate: $closeDate
           pointOfContactId: $personId
         }) {
@@ -126,7 +126,7 @@ const logActivity = async ({ crmPersonId, message, direction }) => {
       `mutation CreateNote($title: String!, $body: String!, $personId: ID!) {
         createNote(data: {
           title: $title
-          body: $body
+          body: { markdown: $body }
           noteTargets: { createMany: { data: [{ personId: $personId }] } }
         }) {
           id
