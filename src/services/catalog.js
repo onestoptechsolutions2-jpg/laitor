@@ -118,4 +118,4 @@ const splitByType = (rows) => ({
  */
 const getByIndex = (list, index) => list[index - 1] || null;
 
-module.exports = { getCatalog, getByIndex, classifyType };
+module.exports = { getCatalog, getByIndex, classifyType, splitByType };
