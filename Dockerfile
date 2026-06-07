@@ -9,9 +9,10 @@ COPY package.json ./
 RUN npm install --omit=dev
 
 COPY src/ ./src/
+COPY public/ ./public/
 COPY docker-entrypoint.sh ./
 
-RUN mkdir -p logs && chmod +x docker-entrypoint.sh
+RUN mkdir -p logs public && chmod +x docker-entrypoint.sh
 
 RUN addgroup -S laitor && adduser -S laitor -G laitor \
     && chown -R laitor:laitor /app
