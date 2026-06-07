@@ -106,17 +106,13 @@ const logActivity = async ({ crmPersonId, message, direction }) => {
 
   try {
     await gql(
-      `mutation CreateNote($title: String!, $personId: ID!) {
-        createNote(data: {
-          title: $title
-          noteTargets: { createMany: { data: [{ personId: $personId }] } }
-        }) {
+      `mutation CreateNote($title: String!) {
+        createNote(data: { title: $title }) {
           id
         }
       }`,
       {
-        title: `WhatsApp ${direction === 'in' ? 'Inbound' : 'Outbound'}: ${message.substring(0, 100)}`,
-        personId: crmPersonId,
+        title: `WhatsApp ${direction === 'in' ? 'IN' : 'OUT'} [${crmPersonId.substring(0, 8)}]: ${message.substring(0, 120)}`,
       }
     );
     logger.debug('CRM activity logged', { crmPersonId, direction });
