@@ -133,6 +133,18 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
         Catalog
       </a>
+      <a onclick="nav('quotes',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        Quotes
+      </a>
+      <a onclick="nav('agents',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        Agents
+      </a>
+      <a onclick="nav('categories',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></svg>
+        Categories
+      </a>
       <a onclick="nav('addlead',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
         Add Lead
@@ -376,7 +388,10 @@ function nav(id, el) {
   if (id === 'dashboard') loadDashboard();
   if (id === 'contacts')  loadContacts();
   if (id === 'orders')    loadOrders();
-  if (id === 'tickets')   loadTickets();
+  if (id === 'tickets')    loadTickets();
+  if (id === 'quotes')     loadQuotes();
+  if (id === 'agents')     loadAgents();
+  if (id === 'categories') loadCategories();
   if (id === 'catalog')   loadCatalog();
 }
 
@@ -664,6 +679,317 @@ function timeAgo(iso) {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 loadDashboard();
+
+// ── Quotes ────────────────────────────────────────────────────────────────────
+let quoteItemCount = 0;
+function showQuoteForm() {
+  document.getElementById('quote-form-wrap').style.display = 'block';
+  document.getElementById('q-items-list').innerHTML = '';
+  quoteItemCount = 0;
+  addQuoteItem();
+}
+function addQuoteItem() {
+  quoteItemCount++;
+  const d = document.createElement('div');
+  d.id = 'qi-' + quoteItemCount;
+  d.style.cssText = 'display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;margin-bottom:8px;align-items:center';
+  d.innerHTML = `
+    <input type="text" placeholder="Item name" id="qi-name-${quoteItemCount}">
+    <input type="text" placeholder="Qty" id="qi-qty-${quoteItemCount}" value="1">
+    <input type="text" placeholder="Price (KES)" id="qi-price-${quoteItemCount}">
+    <button class="btn btn-danger btn-sm" onclick="document.getElementById('qi-${quoteItemCount}').remove()">✕</button>
+  `;
+  document.getElementById('q-items-list').appendChild(d);
+}
+async function submitQuote() {
+  const phone = document.getElementById('q-phone').value.trim();
+  if (!phone) return toast('Phone is required', true);
+  const items = [];
+  document.querySelectorAll('#q-items-list > div').forEach(row => {
+    const n = row.querySelector('[id^="qi-name-"]')?.value?.trim();
+    const q = parseInt(row.querySelector('[id^="qi-qty-"]')?.value) || 1;
+    const p = parseFloat(row.querySelector('[id^="qi-price-"]')?.value) || 0;
+    if (n) items.push({ name: n, qty: q, price: p });
+  });
+  if (!items.length) return toast('Add at least one item', true);
+  try {
+    const d = await fetch(API + '/quotes', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ phone, items, notes: document.getElementById('q-notes').value.trim() || undefined }),
+    }).then(r => r.json());
+    const el = document.getElementById('q-result');
+    el.style.display = 'block';
+    if (d.success) {
+      el.innerHTML = `<div style="padding:12px;background:rgba(34,197,94,.1);border-radius:8px;color:var(--green)">✅ Quote #${d.quote.id} sent to ${phone} via WhatsApp.</div>`;
+      loadQuotes();
+    } else {
+      el.innerHTML = `<div style="padding:12px;background:rgba(239,68,68,.1);border-radius:8px;color:var(--red)">❌ ${d.error}</div>`;
+    }
+  } catch(e) { toast('Error: ' + e.message, true); }
+}
+async function loadQuotes() {
+  try {
+    const d = await fetch(API + '/quotes').then(r => r.json());
+    const badges = { draft:'grey', sent:'blue', approved:'green', invoiced:'green', declined:'red', expired:'grey' };
+    document.getElementById('quotes-body').innerHTML = (d.quotes || []).map(q => `
+      <tr>
+        <td>#${q.id}</td>
+        <td>${q.name || '—'}</td>
+        <td>${q.phone}</td>
+        <td>${parseFloat(q.total_amount||0).toLocaleString()}</td>
+        <td><span class="badge badge-${badges[q.status]||'grey'}">${q.status}</span></td>
+        <td style="font-size:11px;color:var(--muted)">${q.manager_quote_ref||'—'}</td>
+        <td style="color:var(--muted);font-size:12px">${fmtDate(q.sent_at||q.created_at)}</td>
+      </tr>
+    `).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:24px">No quotes yet</td></tr>';
+  } catch(e) { toast('Load quotes failed', true); }
+}
+
+// ── Agents ────────────────────────────────────────────────────────────────────
+function showAgentForm(agent) {
+  document.getElementById('agent-form-wrap').style.display = 'block';
+  document.getElementById('agent-form-title').textContent = agent ? 'Edit Agent' : 'Add Agent';
+  document.getElementById('af-id').value       = agent?.id || '';
+  document.getElementById('af-name').value     = agent?.name || '';
+  document.getElementById('af-phone').value    = agent?.phone || '';
+  document.getElementById('af-email').value    = agent?.email || '';
+  document.getElementById('af-escalation').value = agent?.escalation_phone || '';
+  document.getElementById('af-notes').value    = agent?.notes || '';
+  const cats = agent?.categories || [];
+  document.querySelectorAll('.cat-check').forEach(cb => { cb.checked = cats.includes(cb.value); });
+}
+async function submitAgent() {
+  const id    = document.getElementById('af-id').value;
+  const name  = document.getElementById('af-name').value.trim();
+  const phone = document.getElementById('af-phone').value.trim();
+  if (!name || !phone) return toast('Name and phone are required', true);
+  const categories = [...document.querySelectorAll('.cat-check:checked')].map(c => c.value);
+  const body = {
+    name, phone,
+    email:            document.getElementById('af-email').value.trim() || undefined,
+    escalation_phone: document.getElementById('af-escalation').value.trim() || undefined,
+    notes:            document.getElementById('af-notes').value.trim() || undefined,
+    categories,
+    active: true,
+  };
+  try {
+    const url    = id ? API + '/agents/' + id : API + '/agents';
+    const method = id ? 'PUT' : 'POST';
+    const d = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(r => r.json());
+    if (d.success) {
+      document.getElementById('agent-form-wrap').style.display = 'none';
+      toast(id ? 'Agent updated' : 'Agent added');
+      loadAgents();
+    } else { toast('Error: ' + d.error, true); }
+  } catch(e) { toast('Error: ' + e.message, true); }
+}
+async function loadAgents() {
+  try {
+    const d = await fetch(API + '/agents').then(r => r.json());
+    document.getElementById('agents-body').innerHTML = (d.agents || []).map(a => `
+      <tr>
+        <td><strong>${a.name}</strong></td>
+        <td>${a.phone}</td>
+        <td>${(a.categories||[]).map(c => `<span class="badge badge-blue" style="margin-right:3px">${c}</span>`).join('')||'—'}</td>
+        <td style="color:var(--muted);font-size:12px">${a.escalation_phone||'—'}</td>
+        <td><span class="badge badge-${a.active?'green':'grey'}">${a.active?'Active':'Inactive'}</span></td>
+        <td style="display:flex;gap:6px">
+          <button class="btn btn-outline btn-sm" onclick='showAgentForm(${JSON.stringify(a)})'>Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteAgent(${a.id})">Deactivate</button>
+        </td>
+      </tr>
+    `).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px">No agents configured</td></tr>';
+  } catch(e) { toast('Load agents failed', true); }
+}
+async function deleteAgent(id) {
+  if (!confirm('Deactivate this agent?')) return;
+  await fetch(API + '/agents/' + id, { method: 'DELETE' });
+  loadAgents(); toast('Agent deactivated');
+}
+
+// ── Categories ────────────────────────────────────────────────────────────────
+function showCatForm(cat) {
+  document.getElementById('cat-form-wrap').style.display = 'block';
+  document.getElementById('cat-form-title').textContent = cat ? 'Edit Category' : 'Add Category';
+  document.getElementById('cf-id').value    = cat?.id || '';
+  document.getElementById('cf-name').value  = cat?.name || '';
+  document.getElementById('cf-mgr').value   = cat?.manager_group_key || '';
+  document.getElementById('cf-order').value = cat?.display_order || '';
+}
+async function submitCategory() {
+  const id   = document.getElementById('cf-id').value;
+  const name = document.getElementById('cf-name').value.trim();
+  if (!name) return toast('Name is required', true);
+  const body = {
+    name,
+    manager_group_key: document.getElementById('cf-mgr').value.trim() || undefined,
+    display_order:     parseInt(document.getElementById('cf-order').value) || 0,
+    active: true,
+  };
+  try {
+    const url    = id ? API + '/categories/' + id : API + '/categories';
+    const method = id ? 'PUT' : 'POST';
+    const d = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(r => r.json());
+    if (d.success) {
+      document.getElementById('cat-form-wrap').style.display = 'none';
+      toast(id ? 'Category updated' : 'Category added');
+      loadCategories();
+    } else { toast('Error: ' + d.error, true); }
+  } catch(e) { toast('Error: ' + e.message, true); }
+}
+async function loadCategories() {
+  try {
+    const d = await fetch(API + '/categories').then(r => r.json());
+    document.getElementById('categories-body').innerHTML = (d.categories || []).map(c => `
+      <tr>
+        <td><strong>${c.name}</strong></td>
+        <td style="color:var(--muted);font-size:12px">${c.slug}</td>
+        <td style="color:var(--muted);font-size:12px">${c.manager_group_key||'—'}</td>
+        <td>${c.display_order}</td>
+        <td><span class="badge badge-${c.active?'green':'grey'}">${c.active?'Active':'Hidden'}</span></td>
+        <td style="display:flex;gap:6px">
+          <button class="btn btn-outline btn-sm" onclick='showCatForm(${JSON.stringify(c)})'>Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteCategory(${c.id})">Delete</button>
+        </td>
+      </tr>
+    `).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px">No categories yet</td></tr>';
+  } catch(e) { toast('Load categories failed', true); }
+}
+async function deleteCategory(id) {
+  if (!confirm('Delete this category?')) return;
+  await fetch(API + '/categories/' + id, { method: 'DELETE' });
+  loadCategories(); toast('Category deleted');
+}
+
+// Extend nav() to load data on switch
+const _origNav = nav;
+
+console.log("[admin] Agents/Categories/Quotes loaded");
 </script>
+
+    <!-- Quotes -->
+    <section id="quotes" class="section">
+      <div class="topbar"><h1>Quotes</h1>
+        <div class="topbar-actions">
+          <button class="btn btn-primary btn-sm" onclick="showQuoteForm()">+ Send Quote</button>
+          <button class="btn btn-outline btn-sm" onclick="loadQuotes()">↻ Refresh</button>
+        </div>
+      </div>
+      <div class="content">
+        <div id="quote-form-wrap" style="display:none;margin-bottom:20px">
+          <div class="table-wrap" style="padding:20px">
+            <h2 style="margin-bottom:16px;font-size:13px;font-weight:600">Send Quote to Customer</h2>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:12px">
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Customer Phone *</label>
+                <input type="text" id="q-phone" placeholder="254712345678"></div>
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Notes</label>
+                <input type="text" id="q-notes" placeholder="Optional quote notes"></div>
+            </div>
+            <div id="q-items-wrap" style="margin-bottom:12px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <label style="font-size:12px;color:var(--muted)">Line Items</label>
+                <button class="btn btn-outline btn-sm" onclick="addQuoteItem()">+ Add Item</button>
+              </div>
+              <div id="q-items-list"></div>
+            </div>
+            <div style="display:flex;gap:10px">
+              <button class="btn btn-primary" onclick="submitQuote()">Send Quote via WhatsApp</button>
+              <button class="btn btn-outline" onclick="document.getElementById('quote-form-wrap').style.display='none'">Cancel</button>
+            </div>
+            <div id="q-result" style="margin-top:12px;display:none"></div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <div class="table-header"><h2>All Quotes</h2></div>
+          <table><thead><tr><th>#</th><th>Customer</th><th>Phone</th><th>Amount (KES)</th><th>Status</th><th>Ref</th><th>Sent</th></tr></thead>
+          <tbody id="quotes-body"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Agents -->
+    <section id="agents" class="section">
+      <div class="topbar"><h1>Team Agents</h1>
+        <div class="topbar-actions">
+          <button class="btn btn-primary btn-sm" onclick="showAgentForm()">+ Add Agent</button>
+          <button class="btn btn-outline btn-sm" onclick="loadAgents()">↻ Refresh</button>
+        </div>
+      </div>
+      <div class="content">
+        <div id="agent-form-wrap" style="display:none;margin-bottom:20px">
+          <div class="table-wrap" style="padding:20px">
+            <h2 style="margin-bottom:16px;font-size:13px;font-weight:600" id="agent-form-title">Add Agent</h2>
+            <input type="hidden" id="af-id">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px">
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Full Name *</label>
+                <input type="text" id="af-name" placeholder="Jane Wanjiku"></div>
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">WhatsApp Phone *</label>
+                <input type="text" id="af-phone" placeholder="254712345678"></div>
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Email</label>
+                <input type="text" id="af-email" placeholder="jane@laitor.co.ke"></div>
+            </div>
+            <div style="margin-bottom:14px">
+              <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:6px">Assigned Categories</label>
+              <div style="display:flex;gap:10px;flex-wrap:wrap">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" class="cat-check" value="internet"> 📶 Internet</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" class="cat-check" value="products"> 📦 Products</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" class="cat-check" value="support"> 🔧 Support</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" class="cat-check" value="finance"> 💰 Finance</label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" class="cat-check" value="general"> 🔔 General</label>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Escalation Phone</label>
+                <input type="text" id="af-escalation" placeholder="Manager phone for escalations"></div>
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Notes</label>
+                <input type="text" id="af-notes" placeholder="Optional notes"></div>
+            </div>
+            <div style="display:flex;gap:10px">
+              <button class="btn btn-primary" onclick="submitAgent()">Save Agent</button>
+              <button class="btn btn-outline" onclick="document.getElementById('agent-form-wrap').style.display='none'">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table><thead><tr><th>Name</th><th>Phone</th><th>Categories</th><th>Escalation</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="agents-body"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Categories -->
+    <section id="categories" class="section">
+      <div class="topbar"><h1>Product Categories</h1>
+        <div class="topbar-actions">
+          <button class="btn btn-primary btn-sm" onclick="showCatForm()">+ Add Category</button>
+          <button class="btn btn-outline btn-sm" onclick="loadCategories()">↻ Refresh</button>
+        </div>
+      </div>
+      <div class="content">
+        <div id="cat-form-wrap" style="display:none;margin-bottom:20px">
+          <div class="table-wrap" style="padding:20px">
+            <h2 style="margin-bottom:16px;font-size:13px;font-weight:600" id="cat-form-title">Add Category</h2>
+            <input type="hidden" id="cf-id">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px">
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Category Name *</label>
+                <input type="text" id="cf-name" placeholder="e.g. Internet Packages"></div>
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Manager.io Group Key</label>
+                <input type="text" id="cf-mgr" placeholder="Manager.io item group key"></div>
+              <div><label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Display Order</label>
+                <input type="text" id="cf-order" placeholder="1"></div>
+            </div>
+            <div style="display:flex;gap:10px">
+              <button class="btn btn-primary" onclick="submitCategory()">Save Category</button>
+              <button class="btn btn-outline" onclick="document.getElementById('cat-form-wrap').style.display='none'">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table><thead><tr><th>Name</th><th>Slug</th><th>Manager.io Group</th><th>Order</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="categories-body"></tbody></table>
+        </div>
+      </div>
+    </section>
+
 </body>
 </html>

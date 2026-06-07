@@ -1,5 +1,41 @@
 'use strict';
 
+/**
+ * @module orchestrator
+ * @description Central message processing engine for the Laitor WhatsApp bot.
+ *
+ * Every inbound WhatsApp message flows through this module.
+ * It maintains a per-customer state machine (stored in Redis) and routes
+ * each message to the correct handler based on the current state.
+ *
+ * State machine overview:
+ *
+ *   (new import contact)
+ *       → CONSENT_PENDING  → KYC_NAME → KYC_LOCATION → MAIN_MENU
+ *
+ *   (inbound / non-import contact)
+ *       → KYC_NAME / KYC_LOCATION (if fields missing) → MAIN_MENU
+ *
+ *   MAIN_MENU
+ *       → INTERNET_BROWSE  → INTERNET_CONFIRM  → (order created) → MAIN_MENU
+ *       → PRODUCT_BROWSE   → PRODUCT_CONFIRM   → (order created) → MAIN_MENU
+ *       → SUPPORT_AWAIT    → (ticket created)  → MAIN_MENU
+ *       → AGENT_HANDOFF    (human takeover — no auto-reply)
+ *
+ *   QUOTE_PENDING   (set when a quote WhatsApp message is sent to the customer)
+ *       → tap QUOTE_APPROVE → invoice created → MAIN_MENU
+ *       → tap QUOTE_DECLINE → CRM LOST → MAIN_MENU
+ *
+ * Consent rules:
+ *   - source='import' contacts: must explicitly accept before any menu is shown
+ *   - source='inbound' contacts: consent is implicit (they messaged us first)
+ *   - STOP keyword: opt-out at any time, from any state
+ *
+ * Admin commands (admin phone only):
+ *   TICKET#<id> RESOLVED [technician name]
+ *   ORDER#<id> CONFIRMED | PROCESSING | FULFILLED | CANCELLED
+ */
+
 const { query }     = require('../models/db');
 const session       = require('../services/session');
 const whatsapp      = require('../services/whatsapp');
@@ -9,11 +45,12 @@ const catalog       = require('../services/catalog');
 const menu          = require('../services/menu');
 const orderService  = require('../services/order');
 const ticketService = require('../services/ticket');
-const admin         = require('../services/admin');
+const agentSvc      = require('../services/agents');
+const quoteSvc      = require('../services/quote');
 const manager       = require('../services/manager');
 const logger        = require('../utils/logger');
 
-// ─── States ───────────────────────────────────────────────────────────────────
+// ─── State constants ──────────────────────────────────────────────────────────
 
 const STATES = {
   CONSENT_PENDING:  'CONSENT_PENDING',
@@ -26,30 +63,18 @@ const STATES = {
   PRODUCT_CONFIRM:  'PRODUCT_CONFIRM',
   SUPPORT_AWAIT:    'SUPPORT_AWAIT',
   AGENT_HANDOFF:    'AGENT_HANDOFF',
+  QUOTE_PENDING:    'QUOTE_PENDING',   // Awaiting customer approve/decline tap
 };
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Utility helpers ──────────────────────────────────────────────────────────
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Upsert customer by phone. Never creates duplicates.
- * Inbound (not from import): set consent = 'given' immediately.
+ * Persist a message to the messages audit log.
+ * Uses ON CONFLICT DO NOTHING on msg_id to prevent duplicate log entries
+ * if the same webhook fires twice (Evolution API can retry).
  */
-const upsertCustomer = async (phone, name, isInbound) => {
-  const res = await query(
-    `INSERT INTO customers (phone, name, source, consent_status)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (phone)
-     DO UPDATE SET
-       name           = COALESCE(EXCLUDED.name, customers.name),
-       updated_at     = NOW()
-     RETURNING *`,
-    [phone, name || null, isInbound ? 'inbound' : 'unknown', isInbound ? 'given' : 'pending']
-  );
-  return res.rows[0];
-};
-
 const logMessage = async ({ phone, direction, text, raw, msgId }) => {
   try {
     await query(
@@ -63,6 +88,13 @@ const logMessage = async ({ phone, direction, text, raw, msgId }) => {
   }
 };
 
+/**
+ * Push customer+lead to Twenty CRM (non-fatal).
+ * Called after any intent is detected.
+ *
+ * @param {object} params - { phone, name, type, notes }
+ * @returns {Promise<string|null>} CRM person ID
+ */
 const syncToCRM = async ({ phone, name, type, notes }) => {
   try {
     const crmPersonId = await crm.upsertPerson({ phone, name });
@@ -77,62 +109,67 @@ const syncToCRM = async ({ phone, name, type, notes }) => {
 };
 
 /**
- * Check what KYC fields are still missing for this customer.
- * Returns the first missing field name, or null if complete.
+ * Determine the first missing KYC field for a customer.
+ * Called after consent is given to progressively collect name and location.
+ *
+ * @param {object} customer - DB row with name, location fields
+ * @returns {'name' | 'location' | null}
  */
 const nextKYCField = (customer) => {
   const name = customer.name;
   if (!name || name === 'Unknown' || name.trim() === '') return 'name';
   if (!customer.location) return 'location';
-  return null; // KYC complete
+  return null;
 };
 
 // ─── KYC handlers ─────────────────────────────────────────────────────────────
 
+/**
+ * Handle the KYC_NAME state — customer is asked for their name.
+ * On receipt, saves to DB + CRM, checks if location is also needed.
+ */
 const handleKYCName = async ({ text, customer, phone }) => {
   const name = text.trim();
   if (name.length < 2) {
     return {
       nextState: STATES.KYC_NAME,
-      replies: [{ type: 'text', text: 'Please enter your full name (e.g. *John Kamau*).' }],
+      replies:   [{ type: 'text', text: 'Please enter your full name (e.g. *John Kamau*).' }],
     };
   }
-  // Save name to DB
-  await query(`UPDATE customers SET name = $1 WHERE phone = $2`, [name, phone]);
 
-  // Update CRM person if exists
+  await query(`UPDATE customers SET name = $1 WHERE phone = $2`, [name, phone]);
   const crmPersonId = await crm.upsertPerson({ phone, name });
   if (crmPersonId) await crm.updatePerson(crmPersonId, { name });
 
-  // Check next KYC field
   const updatedCustomer = { ...customer, name };
-  const nextField = nextKYCField(updatedCustomer);
+  const nextField       = nextKYCField(updatedCustomer);
 
   if (nextField === 'location') {
     return {
       nextState: STATES.KYC_LOCATION,
-      replies: [{ type: 'text', text: `Thanks ${name}! 👋\n\nOne more thing — which area or estate are you located in? (e.g. *Westlands*, *Kilimani*, *Mombasa Road*)` }],
+      replies: [{ type: 'text', text: `Thanks ${name}! 👋\n\nOne more thing — which area or estate are you in? (e.g. *Westlands*, *Kilimani*, *Mombasa Road*)` }],
     };
   }
-
   return {
     nextState: STATES.MAIN_MENU,
-    replies: [{ type: 'text', text: `Thanks ${name}! You're all set. 🎉` }, ...menu.MAIN_MENU],
+    replies:   [{ type: 'text', text: `Thanks ${name}! You're all set. 🎉` }, ...menu.MAIN_MENU],
   };
 };
 
+/**
+ * Handle the KYC_LOCATION state — customer is asked for their area.
+ * On receipt, saves to DB + CRM, shows main menu.
+ */
 const handleKYCLocation = async ({ text, customer, phone }) => {
   const location = text.trim();
   if (location.length < 2) {
     return {
       nextState: STATES.KYC_LOCATION,
-      replies: [{ type: 'text', text: 'Please enter your area or estate name.' }],
+      replies:   [{ type: 'text', text: 'Please enter your area or estate name.' }],
     };
   }
-  // Save to DB
-  await query(`UPDATE customers SET location = $1 WHERE phone = $2`, [location, phone]);
 
-  // Update CRM
+  await query(`UPDATE customers SET location = $1 WHERE phone = $2`, [location, phone]);
   const crmPersonId = await crm.findPersonByPhone(phone).then((p) => p?.id).catch(() => null);
   if (crmPersonId) await crm.updatePerson(crmPersonId, { location });
 
@@ -146,8 +183,16 @@ const handleKYCLocation = async ({ text, customer, phone }) => {
   };
 };
 
-// ─── Admin command handler ─────────────────────────────────────────────────────
+// ─── Admin command handler ────────────────────────────────────────────────────
 
+/**
+ * Parse an admin command from a WhatsApp message.
+ * Format: TICKET#42 RESOLVED John  /  ORDER#7 CONFIRMED
+ * Returns null if the message is not a valid admin command.
+ *
+ * @param {string} text
+ * @returns {{type, id, action, extra}|null}
+ */
 const parseAdminCommand = (text) => {
   const match = text.trim().match(/^(TICKET|ORDER)#(\d+)\s+(\w+)(?:\s+(.+))?$/i);
   if (!match) return null;
@@ -160,46 +205,70 @@ const handleAdminCommand = async ({ cmd, phone }) => {
   let reply = null;
 
   if (cmd.type === 'TICKET') {
-    const statusMap = { RESOLVED: ticketService.TICKET_STATUS.RESOLVED, CLOSED: ticketService.TICKET_STATUS.CLOSED, IN_PROGRESS: ticketService.TICKET_STATUS.IN_PROGRESS, ASSIGNED: ticketService.TICKET_STATUS.IN_PROGRESS };
+    const statusMap = {
+      RESOLVED:    ticketService.TICKET_STATUS.RESOLVED,
+      CLOSED:      ticketService.TICKET_STATUS.CLOSED,
+      IN_PROGRESS: ticketService.TICKET_STATUS.IN_PROGRESS,
+      ASSIGNED:    ticketService.TICKET_STATUS.IN_PROGRESS,
+    };
     const status = statusMap[cmd.action];
     if (status) {
       const ticket = await ticketService.updateStatus(cmd.id, status, cmd.extra);
       if (ticket) {
-        await whatsapp.sendText(ticket.phone, 'Update on your support ticket #' + ticket.id + ':\nStatus: ' + status.replace('_', ' ') + (cmd.extra ? '\nTechnician: ' + cmd.extra : '') + '\n\nThank you for your patience. - Laitor Support');
-        reply = 'Ticket #' + cmd.id + ' → ' + status;
-      } else { reply = 'Ticket #' + cmd.id + ' not found'; }
+        await whatsapp.sendText(ticket.phone,
+          `Update on your support ticket *#${ticket.id}*:\n` +
+          `Status: ${status.replace('_', ' ')}` +
+          (cmd.extra ? `\nTechnician: ${cmd.extra}` : '') +
+          '\n\nThank you for your patience. — Laitor Support'
+        );
+        reply = `Ticket #${cmd.id} → ${status}`;
+      } else { reply = `Ticket #${cmd.id} not found`; }
     }
   }
 
   if (cmd.type === 'ORDER') {
-    const statusMap = { CONFIRMED: orderService.ORDER_STATUS.CONFIRMED, PROCESSING: orderService.ORDER_STATUS.PROCESSING, FULFILLED: orderService.ORDER_STATUS.FULFILLED, CANCELLED: orderService.ORDER_STATUS.CANCELLED };
+    const statusMap = {
+      CONFIRMED:  orderService.ORDER_STATUS.CONFIRMED,
+      PROCESSING: orderService.ORDER_STATUS.PROCESSING,
+      FULFILLED:  orderService.ORDER_STATUS.FULFILLED,
+      CANCELLED:  orderService.ORDER_STATUS.CANCELLED,
+    };
     const status = statusMap[cmd.action];
     if (status) {
       const order = await orderService.updateStatus(cmd.id, status);
       if (order) {
         if (status === orderService.ORDER_STATUS.CONFIRMED) {
           const customerKey = await manager.upsertCustomer({ phone: order.phone, name: order.phone });
-          await manager.createInvoice({ customerKey, orderId: order.id, product: order.product, phone: order.phone });
+          const invoiceRef  = await manager.createInvoice({ customerKey, orderId: order.id, product: order.product, phone: order.phone });
+          if (invoiceRef) {
+            await agentSvc.notifyNewInvoice({ phone: order.phone, name: order.name || order.phone, invoiceRef });
+          }
         }
-        await whatsapp.sendText(order.phone, 'Update on your order #' + order.id + ':\nProduct: ' + order.product + '\nStatus: ' + status.toUpperCase() + '\n\nThank you for choosing Laitor! - Laitor Team');
-        reply = 'Order #' + cmd.id + ' → ' + status;
-      } else { reply = 'Order #' + cmd.id + ' not found'; }
+        await whatsapp.sendText(order.phone,
+          `Update on your order *#${order.id}*:\n` +
+          `Product: ${order.product}\n` +
+          `Status: ${status.toUpperCase()}\n\n` +
+          `Thank you for choosing Laitor! — Laitor Team`
+        );
+        reply = `Order #${cmd.id} → ${status}`;
+      } else { reply = `Order #${cmd.id} not found`; }
     }
   }
   return reply;
 };
 
-// ─── Main menu handler ─────────────────────────────────────────────────────────
+// ─── Menu handlers ────────────────────────────────────────────────────────────
 
+/** Main menu — routes to internet, products, support, or agent handoff */
 const handleMainMenu = async ({ text }) => {
   const choice = text.trim().replace(/[^0-9]/g, '');
   if (choice === '1') {
-    const cat = await catalog.getCatalog();
+    const cat      = await catalog.getCatalog();
     const internet = catalog.splitByType(cat).internet;
     return { nextState: STATES.INTERNET_BROWSE, replies: menu.buildInternetMenu(internet), sessionData: { catalogInternet: internet } };
   }
   if (choice === '2') {
-    const cat = await catalog.getCatalog();
+    const cat      = await catalog.getCatalog();
     const products = catalog.splitByType(cat).products;
     return { nextState: STATES.PRODUCT_BROWSE, replies: menu.buildProductMenu(products), sessionData: { catalogProducts: products } };
   }
@@ -214,7 +283,7 @@ const handleInternetBrowse = async ({ text, sess }) => {
   let items = sess.catalogInternet;
   if (!items) { const cat = await catalog.getCatalog(); items = catalog.splitByType(cat).internet; }
   const selected = catalog.getByIndex(items, choice);
-  if (!selected) return { nextState: STATES.INTERNET_BROWSE, replies: [{ type: 'text', text: `Please select a number between 1 and ${items.length}, or 0 to go back.` }], sessionData: { catalogInternet: items } };
+  if (!selected) return { nextState: STATES.INTERNET_BROWSE, replies: [{ type: 'text', text: `Please pick a number 1–${items.length}, or 0 to go back.` }], sessionData: { catalogInternet: items } };
   return { nextState: STATES.INTERNET_CONFIRM, replies: menu.buildConfirmMenu(selected.name, selected.price), sessionData: { pendingItem: selected, catalogInternet: items } };
 };
 
@@ -224,23 +293,30 @@ const handleProductBrowse = async ({ text, sess }) => {
   let items = sess.catalogProducts;
   if (!items) { const cat = await catalog.getCatalog(); items = catalog.splitByType(cat).products; }
   const selected = catalog.getByIndex(items, choice);
-  if (!selected) return { nextState: STATES.PRODUCT_BROWSE, replies: [{ type: 'text', text: `Please select a number between 1 and ${items.length}, or 0 to go back.` }], sessionData: { catalogProducts: items } };
+  if (!selected) return { nextState: STATES.PRODUCT_BROWSE, replies: [{ type: 'text', text: `Please pick a number 1–${items.length}, or 0 to go back.` }], sessionData: { catalogProducts: items } };
   return { nextState: STATES.PRODUCT_CONFIRM, replies: menu.buildConfirmMenu(selected.name, selected.price), sessionData: { pendingItem: selected, catalogProducts: items } };
 };
 
 const handleConfirm = async ({ text, customer, phone, name, sess, orderType }) => {
-  const choice = text.trim().replace(/[^0-9]/g, '');
+  const choice = text.trim().replace(/[^0-9A-Z_]/gi, '').toUpperCase();
+
   if (choice === '2' || /^cancel$/i.test(text.trim())) {
     const items = orderType === 'internet' ? sess.catalogInternet : sess.catalogProducts;
     return { nextState: orderType === 'internet' ? STATES.INTERNET_BROWSE : STATES.PRODUCT_BROWSE, replies: orderType === 'internet' ? menu.buildInternetMenu(items || []) : menu.buildProductMenu(items || []) };
   }
+
   if (choice === '1') {
     const item = sess.pendingItem;
     if (!item) return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+
     let order = null;
     if (customer.id) order = await orderService.create({ customerId: customer.id, product: item.name, notes: item.name });
+
     await syncToCRM({ phone, name, type: orderType === 'internet' ? 'INTERNET_LEAD' : 'PRODUCT_ORDER', notes: item.name });
-    await admin.notifyNewOrder({ orderId: order?.id || '?', phone, name, product: item.name, notes: `KES ${item.price || 'TBD'}` });
+
+    // Notify category agent
+    await agentSvc.notifyNewOrder({ phone, name, product: item.name, orderId: order?.id || '?', notes: `KES ${item.price || 'TBD'}` });
+
     return {
       nextState: STATES.MAIN_MENU,
       replies: [
@@ -249,6 +325,7 @@ const handleConfirm = async ({ text, customer, phone, name, sess, orderType }) =
       ],
     };
   }
+
   return { nextState: orderType === 'internet' ? STATES.INTERNET_CONFIRM : STATES.PRODUCT_CONFIRM, replies: [{ type: 'text', text: 'Please tap *Confirm Order* or *Cancel*.' }] };
 };
 
@@ -256,32 +333,112 @@ const handleSupportAwait = async ({ text, customer, phone, name }) => {
   let ticket = null;
   if (customer.id) ticket = await ticketService.create({ customerId: customer.id, issue: text });
   await syncToCRM({ phone, name, type: 'SUPPORT_REQUEST', notes: text });
-  await admin.notifyNewTicket({ ticketId: ticket?.id || '?', phone, name, issue: text, priority: ticket?.priority || 'medium' });
+  await agentSvc.notifyNewTicket({ phone, name, issue: text, ticketId: ticket?.id || '?', priority: ticket?.priority || 'medium' });
   return {
     nextState: STATES.MAIN_MENU,
     replies: [
-      { type: 'text', text: `✅ Support ticket *#${ticket?.id || '?'}* logged.\n\nOur technical team will reach out to you shortly.` },
+      { type: 'text', text: `✅ Support ticket *#${ticket?.id || '?'}* logged.\n\nOur technical team will reach out shortly.` },
       ...menu.MAIN_MENU,
     ],
   };
 };
 
-// ─── Main process ──────────────────────────────────────────────────────────────
+// ─── Quote approval handler ───────────────────────────────────────────────────
 
+/**
+ * Handle QUOTE_PENDING state.
+ * Listens for the QUOTE_APPROVE or QUOTE_DECLINE button tap from the customer.
+ * Button IDs are sent as the message text by Evolution API.
+ *
+ * On approval:
+ *   1. Convert quote → invoice in Manager.io
+ *   2. Advance CRM to WON
+ *   3. Notify finance agent
+ *   4. Send invoice confirmation to customer
+ *
+ * On decline:
+ *   1. CRM → LOST
+ *   2. Notify sales agent
+ *   3. Thank customer, return to main menu
+ */
+const handleQuotePending = async ({ text, customer, phone, sess }) => {
+  const tap = text.trim().toUpperCase();
+
+  if (tap === 'QUOTE_APPROVE' || tap === '1') {
+    try {
+      const quoteId = sess.pendingQuoteId;
+      if (!quoteId) return { nextState: STATES.MAIN_MENU, replies: [{ type: 'text', text: 'Quote not found. Please contact our team.' }, ...menu.MAIN_MENU] };
+
+      const { invoiceRef } = await quoteSvc.approve(quoteId, customer);
+
+      return {
+        nextState: STATES.MAIN_MENU,
+        replies: [
+          {
+            type: 'text',
+            text: [
+              `✅ *Quote Approved!*`,
+              ``,
+              `Thank you for confirming. Your invoice has been issued.`,
+              `Invoice Ref: *${invoiceRef}*`,
+              ``,
+              `Our team will follow up with next steps. — Laitor Team`,
+            ].join('\n'),
+          },
+          ...menu.MAIN_MENU,
+        ],
+      };
+    } catch (err) {
+      logger.error('Quote approval error', { phone, error: err.message });
+      return { nextState: STATES.MAIN_MENU, replies: [{ type: 'text', text: 'Sorry, we could not process your approval. Please contact our team directly.' }, ...menu.MAIN_MENU] };
+    }
+  }
+
+  if (tap === 'QUOTE_DECLINE' || tap === '2') {
+    try {
+      const quoteId = sess.pendingQuoteId;
+      if (quoteId) await quoteSvc.decline(quoteId, customer);
+    } catch (err) {
+      logger.warn('Quote decline error (non-fatal)', { phone, error: err.message });
+    }
+    return {
+      nextState: STATES.MAIN_MENU,
+      replies: [
+        { type: 'text', text: `Understood — quote declined. Our team will reach out if you have any questions.\n\nFeel free to browse our services again.` },
+        ...menu.MAIN_MENU,
+      ],
+    };
+  }
+
+  // Unrecognised response while quote is pending
+  return {
+    nextState: STATES.QUOTE_PENDING,
+    replies: [{ type: 'text', text: 'Please tap *Approve Quote* or *Decline* to respond to your quote.' }],
+  };
+};
+
+// ─── Main process ─────────────────────────────────────────────────────────────
+
+/**
+ * Process a single inbound WhatsApp message end-to-end.
+ * Called by the webhook route for every inbound event.
+ *
+ * @param {object} msg - Normalised message: { phone, name, text, msgId, raw }
+ */
 const process = async (msg) => {
   const { phone, name, text, msgId, raw } = msg;
   logger.info('Orchestrator processing', { phone, msgId });
 
   await logMessage({ phone, direction: 'in', text, raw, msgId });
 
-  // Admin commands bypass all state
+  // ── Admin commands bypass all state ────────────────────────────────────────
   const cmd = parseAdminCommand(text);
   if (cmd) {
     const adminReply = await handleAdminCommand({ cmd, phone });
     if (adminReply) { await whatsapp.sendText(phone, adminReply); return; }
   }
 
-  // Global opt-out
+  // ── Global opt-out ─────────────────────────────────────────────────────────
   if (/^stop$/i.test(text.trim())) {
     await consent.denyConsent(phone);
     await query(`UPDATE customers SET consent_status = 'denied' WHERE phone = $1`, [phone]);
@@ -291,23 +448,19 @@ const process = async (msg) => {
 
   const wantsMenu = /^(menu|hi|hello|hujambo|habari|start)$/i.test(text.trim());
 
-  // ── Upsert customer ──────────────────────────────────────────────────────────
-  // Key rule: inbound contacts (messaging us first) get consent = 'given' automatically.
-  // Only imported contacts (source='import') need explicit consent.
+  // ── Upsert customer ────────────────────────────────────────────────────────
   let customer = { id: null, phone };
   try {
-    // Check if they already exist
     const existing = await query(`SELECT * FROM customers WHERE phone = $1`, [phone]);
 
     if (existing.rows.length > 0) {
       customer = existing.rows[0];
-      // If they exist but source is NOT import, ensure consent is given
+      // Non-import contacts that somehow still have pending consent → auto-give
       if (customer.source !== 'import' && customer.consent_status === 'pending') {
         await query(`UPDATE customers SET consent_status = 'given' WHERE phone = $1`, [phone]);
         customer.consent_status = 'given';
       }
     } else {
-      // Brand new inbound contact — create with consent given
       const res = await query(
         `INSERT INTO customers (phone, name, source, consent_status)
          VALUES ($1, $2, 'inbound', 'given')
@@ -323,27 +476,25 @@ const process = async (msg) => {
   }
 
   const consentStatus = customer.consent_status || 'pending';
-  const sess = await session.get(phone);
+  const sess          = await session.get(phone);
 
-  // ── CONSENT GATE (imported contacts only) ───────────────────────────────────
+  // ── CONSENT GATE (imported contacts only) ──────────────────────────────────
   if (consentStatus !== 'given') {
     if (consentStatus === 'denied') {
       logger.info('Message from opted-out contact ignored', { phone });
       return;
     }
 
-    // pending → only imports reach here
     if (!sess.consentSent) {
       await whatsapp.sendSequence(phone, consent.CONSENT_MESSAGE);
       await session.set(phone, { ...sess, state: STATES.CONSENT_PENDING, consentSent: true, customerId: customer.id });
     } else {
-      // Handle their consent reply
       const consentReply = consent.parseConsentReply(text);
       if (consentReply === consent.CONSENT_STATUS.GIVEN) {
         await consent.giveConsent(phone);
         await query(`UPDATE customers SET consent_status = 'given', consented_at = NOW() WHERE phone = $1`, [phone]);
         const updatedCustomer = { ...customer, consent_status: 'given' };
-        const nextField = nextKYCField(updatedCustomer);
+        const nextField       = nextKYCField(updatedCustomer);
         if (nextField === 'name') {
           await whatsapp.sendText(phone, `Thank you for accepting! 🎉\n\nTo serve you better, what is your full name?`);
           await session.set(phone, { state: STATES.KYC_NAME, customerId: customer.id });
@@ -366,10 +517,10 @@ const process = async (msg) => {
     return;
   }
 
-  // ── CONSENTED — run state machine ────────────────────────────────────────────
+  // ── CONSENTED — run state machine ──────────────────────────────────────────
   const currentState = sess.state || STATES.MAIN_MENU;
 
-  // KYC check: on first interaction after consent, collect missing info
+  // KYC check on first MAIN_MENU visit
   if (!sess.kycDone && !wantsMenu && currentState === STATES.MAIN_MENU) {
     const nextField = nextKYCField(customer);
     if (nextField === 'name') {
@@ -382,7 +533,6 @@ const process = async (msg) => {
       await session.set(phone, { ...sess, state: STATES.KYC_LOCATION, customerId: customer.id });
       return;
     }
-    // KYC complete — mark so we don't check again this session
     await session.set(phone, { ...sess, kycDone: true });
   }
 
@@ -395,6 +545,8 @@ const process = async (msg) => {
       result = await handleKYCName({ text, customer, phone });
     } else if (currentState === STATES.KYC_LOCATION) {
       result = await handleKYCLocation({ text, customer, phone });
+    } else if (currentState === STATES.QUOTE_PENDING) {
+      result = await handleQuotePending({ text, customer, phone, sess });
     } else if (currentState === STATES.MAIN_MENU) {
       result = await handleMainMenu({ text });
     } else if (currentState === STATES.INTERNET_BROWSE) {
@@ -414,11 +566,20 @@ const process = async (msg) => {
       result = { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
     }
   } catch (err) {
-    logger.error('Orchestrator handler error', { phone, error: err.message, stack: err.stack });
+    logger.error('Orchestrator handler error', { phone, state: currentState, error: err.message, stack: err.stack });
     result = { nextState: STATES.MAIN_MENU, replies: [{ type: 'text', text: 'We encountered an issue. Type *MENU* to try again.' }] };
   }
 
-  const newSess = { ...sess, state: result.nextState, lastMessage: text, customerId: customer.id, kycDone: result.nextState !== STATES.KYC_NAME && result.nextState !== STATES.KYC_LOCATION ? (sess.kycDone || result.nextState === STATES.MAIN_MENU) : false, ...(result.sessionData || {}) };
+  const newSess = {
+    ...sess,
+    state:       result.nextState,
+    lastMessage: text,
+    customerId:  customer.id,
+    kycDone:     result.nextState !== STATES.KYC_NAME && result.nextState !== STATES.KYC_LOCATION
+                 ? (sess.kycDone || result.nextState === STATES.MAIN_MENU)
+                 : false,
+    ...(result.sessionData || {}),
+  };
   await session.set(phone, newSess);
 
   try {
@@ -434,4 +595,4 @@ const process = async (msg) => {
   logger.info('Orchestrator done', { phone, nextState: result.nextState });
 };
 
-module.exports = { process };
+module.exports = { process, STATES };
