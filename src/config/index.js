@@ -25,9 +25,10 @@ module.exports = {
     url: optional('REDIS_URL', 'redis://laitor_cache:6379'),
   },
   manager: {
-    url:         optional('MANAGER_URL'),
-    apiKey:      optional('MANAGER_API_KEY'),
-    businessKey: optional('MANAGER_BUSINESS_KEY'),
+    // MANAGER_URL = full API2 endpoint, e.g. http://finance360.laitor.co.ke/api2
+    // MANAGER_API_KEY = access token from Manager.io Settings → API
+    url:    optional('MANAGER_URL'),
+    apiKey: optional('MANAGER_API_KEY'),
   },
   webhook: {
     secret: optional('WEBHOOK_SECRET', 'laitor_webhook_secret'),

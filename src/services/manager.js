@@ -5,20 +5,20 @@ const config = require('../config');
 const logger = require('../utils/logger');
 
 /**
- * Manager.io Server REST API client.
+ * Manager.io Server REST API v2 client.
  *
  * Required env vars:
- *   MANAGER_URL          - e.g. https://manager.laitor.co.ke
- *   MANAGER_API_KEY      - API key from Manager.io Settings → API
- *   MANAGER_BUSINESS_KEY - Business GUID from Manager.io Settings
+ *   MANAGER_URL     - full API endpoint, e.g. http://finance360.laitor.co.ke/api2
+ *   MANAGER_API_KEY - access token from Manager.io Settings → API
+ *
+ * MANAGER_BUSINESS_KEY is NOT needed for the v2 API format.
  */
 
-const isConfigured = () =>
-  !!(config.manager.url && config.manager.apiKey && config.manager.businessKey);
+const isConfigured = () => !!(config.manager.url && config.manager.apiKey);
 
 const client = () =>
   axios.create({
-    baseURL: `${config.manager.url}/api/${config.manager.businessKey}`,
+    baseURL: config.manager.url,   // already the full endpoint, e.g. http://finance360.laitor.co.ke/api2
     headers: {
       Authorization: config.manager.apiKey,
       'Content-Type': 'application/json',
@@ -34,9 +34,8 @@ const upsertCustomer = async ({ phone, name }) => {
   if (!isConfigured()) return null;
 
   try {
-    // Search for existing customer
     const res = await client().get('/customers');
-    const customers = res.data || [];
+    const customers = Array.isArray(res.data) ? res.data : [];
 
     const existing = customers.find(
       (c) =>
@@ -49,7 +48,6 @@ const upsertCustomer = async ({ phone, name }) => {
       return existing.key;
     }
 
-    // Create new customer
     const createRes = await client().post('/customers', {
       Name: name || phone,
       CustomFields: [{ CustomField: 'Phone', Value: phone }],
@@ -59,10 +57,8 @@ const upsertCustomer = async ({ phone, name }) => {
     logger.info('Manager customer created', { key, phone });
     return key;
   } catch (err) {
-    logger.error('Manager upsertCustomer failed', {
-      phone,
-      error: err.message,
-      response: err.response?.data,
+    logger.warn('Manager upsertCustomer failed (non-fatal)', {
+      phone, error: err.message,
     });
     return null;
   }
@@ -70,53 +66,57 @@ const upsertCustomer = async ({ phone, name }) => {
 
 /**
  * Create a Sales Invoice in Manager.io for a confirmed order.
- *
- * @param {{ customerKey: string, orderId: number, product: string, phone: string }} params
- * @returns {Promise<string|null>} Invoice reference or null
  */
 const createInvoice = async ({ customerKey, orderId, product, phone }) => {
   if (!isConfigured()) {
-    logger.warn('Manager.io not configured — skipping invoice creation');
+    logger.warn('Manager.io not configured — skipping invoice');
     return null;
   }
 
   try {
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const today     = new Date().toISOString().split('T')[0];
     const reference = `WA-ORDER-${orderId}`;
 
     const body = {
-      Date: today,
+      Date:      today,
       Reference: reference,
       ...(customerKey ? { Customer: customerKey } : {}),
-      Lines: [
-        {
-          Description: product,
-          Qty: 1,
-          UnitPrice: 0, // Price to be filled manually
-        },
-      ],
+      Lines: [{ Description: product, Qty: 1, UnitPrice: 0 }],
     };
 
-    const res = await client().post('/sales-invoices', body);
+    const res       = await client().post('/sales-invoices', body);
     const invoiceKey = res.data?.key;
 
-    logger.info('Manager invoice created', {
-      invoiceKey,
-      reference,
-      orderId,
-      product,
-      phone,
-    });
-
+    logger.info('Manager invoice created', { invoiceKey, reference, orderId, product, phone });
     return invoiceKey || reference;
   } catch (err) {
-    logger.error('Manager createInvoice failed', {
-      orderId,
-      error: err.message,
-      response: err.response?.data,
+    logger.warn('Manager createInvoice failed (non-fatal)', {
+      orderId, error: err.message,
     });
     return null;
   }
 };
 
-module.exports = { upsertCustomer, createInvoice };
+/**
+ * Fetch inventory items for the catalog.
+ * Tries /inventory-items then /items.
+ */
+const getInventoryItems = async () => {
+  if (!isConfigured()) return [];
+
+  for (const path of ['/inventory-items', '/items']) {
+    try {
+      const res = await client().get(path);
+      const data = Array.isArray(res.data) ? res.data : [];
+      if (data.length > 0) {
+        logger.info('Manager inventory fetched', { count: data.length, path });
+        return data;
+      }
+    } catch (_) {}
+  }
+
+  logger.warn('Manager inventory fetch returned no items');
+  return [];
+};
+
+module.exports = { upsertCustomer, createInvoice, getInventoryItems };
