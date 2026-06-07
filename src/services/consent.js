@@ -2,6 +2,7 @@
 
 const { query } = require('../models/db');
 const logger = require('../utils/logger');
+const menu   = require('./menu');
 
 const CONSENT_STATUS = {
   PENDING: 'pending',
@@ -9,52 +10,33 @@ const CONSENT_STATUS = {
   DENIED:  'denied',
 };
 
-const CONSENT_MESSAGE = [
-  'Hello! This is Laitor Invest Limited.',
-  'We would like to send you information about our internet packages, products, and support services via WhatsApp.\n\nPlease reply with:\n*1* - Yes, I accept\n*2* - No, opt out\n\nYou can reply *STOP* at any time to stop receiving messages from us.',
-];
+// Interactive consent message (buttons) — imported from menu
+const CONSENT_MESSAGE = menu.CONSENT_MESSAGE;
 
-/**
- * Get the consent status for a phone number.
- * Returns 'pending' if customer not found.
- */
 const getStatus = async (phone) => {
-  const res = await query(
-    'SELECT consent_status FROM customers WHERE phone = $1',
-    [phone]
-  );
+  const res = await query('SELECT consent_status FROM customers WHERE phone = $1', [phone]);
   return res.rows[0]?.consent_status || CONSENT_STATUS.PENDING;
 };
 
-/**
- * Mark a customer as having given consent.
- */
 const giveConsent = async (phone) => {
   await query(
-    `UPDATE customers
-     SET consent_status = 'given', consented_at = NOW(), updated_at = NOW()
-     WHERE phone = $1`,
+    `UPDATE customers SET consent_status = 'given', consented_at = NOW(), updated_at = NOW() WHERE phone = $1`,
     [phone]
   );
   logger.info('Consent given', { phone });
 };
 
-/**
- * Mark a customer as having denied consent (opted out).
- */
 const denyConsent = async (phone) => {
   await query(
-    `UPDATE customers
-     SET consent_status = 'denied', updated_at = NOW()
-     WHERE phone = $1`,
+    `UPDATE customers SET consent_status = 'denied', updated_at = NOW() WHERE phone = $1`,
     [phone]
   );
   logger.info('Consent denied / opted out', { phone });
 };
 
 /**
- * Parse a customer reply to determine if it is a consent response.
- * Returns 'given', 'denied', or null (not a consent reply).
+ * Parse consent reply — works for both typed text and button tap IDs.
+ * Button tap sends the buttonId ('1' or '2') as the message text.
  */
 const parseConsentReply = (text) => {
   const t = (text || '').trim().toLowerCase();
@@ -67,11 +49,4 @@ const parseConsentReply = (text) => {
   return null;
 };
 
-module.exports = {
-  CONSENT_STATUS,
-  CONSENT_MESSAGE,
-  getStatus,
-  giveConsent,
-  denyConsent,
-  parseConsentReply,
-};
+module.exports = { CONSENT_STATUS, CONSENT_MESSAGE, getStatus, giveConsent, denyConsent, parseConsentReply };

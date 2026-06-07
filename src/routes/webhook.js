@@ -1,45 +1,42 @@
 'use strict';
 
-const express = require('express');
+const express      = require('express');
 const orchestrator = require('../orchestrator');
-const logger = require('../utils/logger');
+const logger       = require('../utils/logger');
 
 const router = express.Router();
 
 /**
- * Normalise an Evolution API webhook payload into a clean internal message object.
- * Evolution API v2 sends a nested structure — we extract only what we need.
- *
- * @param {object} body - Raw webhook body
- * @returns {{ phone, name, text, msgId, raw } | null}
+ * Normalise Evolution API v2 webhook payload → internal message object.
+ * Handles: plain text, extended text, button tap replies, list tap replies.
  */
 const normalise = (body) => {
   try {
-    // Evolution API v2 structure
     const data = body?.data;
-    const key = data?.key;
-    const msg = data?.message;
+    const key  = data?.key;
+    const msg  = data?.message;
 
-    // Only handle incoming text messages (ignore status updates, receipts, etc.)
-    if (!key || !msg) return null;
-    if (key.fromMe === true) return null;         // Ignore our own outbound messages
+    if (!key || !msg)                    return null;
+    if (key.fromMe === true)             return null;
     if (body.event !== 'messages.upsert') return null;
 
     const phone = key.remoteJid?.replace('@s.whatsapp.net', '');
     if (!phone) return null;
 
-    // Extract text (handles plain text, extended text, and image captions)
+    // Extract text — try all known message types
     const text =
-      msg.conversation ||
-      msg.extendedTextMessage?.text ||
-      msg.imageMessage?.caption ||
-      msg.documentMessage?.caption ||
+      msg.conversation                                          ||  // plain text
+      msg.extendedTextMessage?.text                            ||  // link/formatted text
+      msg.buttonsResponseMessage?.selectedButtonId             ||  // button tap → use the ID as the reply
+      msg.listResponseMessage?.singleSelectReply?.selectedRowId || // list tap → row ID
+      msg.imageMessage?.caption                                ||
+      msg.documentMessage?.caption                             ||
       '';
 
-    if (!text.trim()) return null; // Skip non-text messages for now
+    if (!text.trim()) return null;
 
     const msgId = key.id || `${phone}-${Date.now()}`;
-    const name = data?.pushName || null;
+    const name  = data?.pushName || null;
 
     return { phone, name, text: text.trim(), msgId, raw: body };
   } catch (err) {
@@ -48,12 +45,7 @@ const normalise = (body) => {
   }
 };
 
-/**
- * POST /webhook/whatsapp
- * Evolution API sends all events here.
- */
 router.post('/', async (req, res) => {
-  // Acknowledge immediately — Evolution API expects a fast 200
   res.status(200).json({ status: 'received' });
 
   const msg = normalise(req.body);
@@ -64,7 +56,6 @@ router.post('/', async (req, res) => {
 
   logger.info('Webhook: inbound message received', { phone: msg.phone, msgId: msg.msgId });
 
-  // Process asynchronously — response already sent
   setImmediate(async () => {
     try {
       await orchestrator.process(msg);
