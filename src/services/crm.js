@@ -10,7 +10,7 @@ const logger = require('../utils/logger');
  */
 const gql = async (query, variables = {}) => {
   const res = await axios.post(
-    `${config.crm.url}/api`,
+    `${config.crm.url}/graphql`,
     { query, variables },
     {
       headers: {
