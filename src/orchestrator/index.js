@@ -1,43 +1,51 @@
 'use strict';
 
-const { query }   = require('../models/db');
-const session     = require('../services/session');
-const whatsapp    = require('../services/whatsapp');
-const crm         = require('../services/crm');
-const consent     = require('../services/consent');
-const catalog     = require('../services/catalog');
-const menu        = require('../services/menu');
+const { query }     = require('../models/db');
+const session       = require('../services/session');
+const whatsapp      = require('../services/whatsapp');
+const crm           = require('../services/crm');
+const consent       = require('../services/consent');
+const catalog       = require('../services/catalog');
+const menu          = require('../services/menu');
 const orderService  = require('../services/order');
 const ticketService = require('../services/ticket');
-const admin       = require('../services/admin');
-const manager     = require('../services/manager');
-const logger      = require('../utils/logger');
+const admin         = require('../services/admin');
+const manager       = require('../services/manager');
+const logger        = require('../utils/logger');
 
 // ─── States ───────────────────────────────────────────────────────────────────
 
 const STATES = {
-  CONSENT_PENDING:     'CONSENT_PENDING',     // waiting for opt-in/opt-out reply
-  MAIN_MENU:           'MAIN_MENU',           // showing main menu
-  INTERNET_BROWSE:     'INTERNET_BROWSE',     // browsing internet packages
-  PRODUCT_BROWSE:      'PRODUCT_BROWSE',      // browsing products
-  INTERNET_CONFIRM:    'INTERNET_CONFIRM',    // confirming selected internet package
-  PRODUCT_CONFIRM:     'PRODUCT_CONFIRM',     // confirming selected product
-  SUPPORT_AWAIT:       'SUPPORT_AWAIT',       // waiting for support description
-  AGENT_HANDOFF:       'AGENT_HANDOFF',       // handed off to human agent
+  CONSENT_PENDING:  'CONSENT_PENDING',
+  KYC_NAME:         'KYC_NAME',
+  KYC_LOCATION:     'KYC_LOCATION',
+  MAIN_MENU:        'MAIN_MENU',
+  INTERNET_BROWSE:  'INTERNET_BROWSE',
+  PRODUCT_BROWSE:   'PRODUCT_BROWSE',
+  INTERNET_CONFIRM: 'INTERNET_CONFIRM',
+  PRODUCT_CONFIRM:  'PRODUCT_CONFIRM',
+  SUPPORT_AWAIT:    'SUPPORT_AWAIT',
+  AGENT_HANDOFF:    'AGENT_HANDOFF',
 };
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const upsertCustomer = async (phone, name) => {
+/**
+ * Upsert customer by phone. Never creates duplicates.
+ * Inbound (not from import): set consent = 'given' immediately.
+ */
+const upsertCustomer = async (phone, name, isInbound) => {
   const res = await query(
-    `INSERT INTO customers (phone, name)
-     VALUES ($1, $2)
+    `INSERT INTO customers (phone, name, source, consent_status)
+     VALUES ($1, $2, $3, $4)
      ON CONFLICT (phone)
-     DO UPDATE SET name = COALESCE(EXCLUDED.name, customers.name), updated_at = NOW()
+     DO UPDATE SET
+       name           = COALESCE(EXCLUDED.name, customers.name),
+       updated_at     = NOW()
      RETURNING *`,
-    [phone, name || null]
+    [phone, name || null, isInbound ? 'inbound' : 'unknown', isInbound ? 'given' : 'pending']
   );
   return res.rows[0];
 };
@@ -59,65 +67,112 @@ const syncToCRM = async ({ phone, name, type, notes }) => {
   try {
     const crmPersonId = await crm.upsertPerson({ phone, name });
     if (!crmPersonId) return null;
-    const crmLeadId = await crm.createLead({ crmPersonId, type, notes });
+    await crm.createLead({ crmPersonId, type, notes });
     await crm.logActivity({ crmPersonId, message: notes || type, direction: 'in' });
-    return { crmPersonId, crmLeadId };
+    return crmPersonId;
   } catch (err) {
     logger.warn('CRM sync failed (non-fatal)', { error: err.message });
     return null;
   }
 };
 
-// ─── Admin command handler (unchanged from v1) ────────────────────────────────
+/**
+ * Check what KYC fields are still missing for this customer.
+ * Returns the first missing field name, or null if complete.
+ */
+const nextKYCField = (customer) => {
+  const name = customer.name;
+  if (!name || name === 'Unknown' || name.trim() === '') return 'name';
+  if (!customer.location) return 'location';
+  return null; // KYC complete
+};
+
+// ─── KYC handlers ─────────────────────────────────────────────────────────────
+
+const handleKYCName = async ({ text, customer, phone }) => {
+  const name = text.trim();
+  if (name.length < 2) {
+    return {
+      nextState: STATES.KYC_NAME,
+      replies: [{ type: 'text', text: 'Please enter your full name (e.g. *John Kamau*).' }],
+    };
+  }
+  // Save name to DB
+  await query(`UPDATE customers SET name = $1 WHERE phone = $2`, [name, phone]);
+
+  // Update CRM person if exists
+  const crmPersonId = await crm.upsertPerson({ phone, name });
+  if (crmPersonId) await crm.updatePerson(crmPersonId, { name });
+
+  // Check next KYC field
+  const updatedCustomer = { ...customer, name };
+  const nextField = nextKYCField(updatedCustomer);
+
+  if (nextField === 'location') {
+    return {
+      nextState: STATES.KYC_LOCATION,
+      replies: [{ type: 'text', text: `Thanks ${name}! 👋\n\nOne more thing — which area or estate are you located in? (e.g. *Westlands*, *Kilimani*, *Mombasa Road*)` }],
+    };
+  }
+
+  return {
+    nextState: STATES.MAIN_MENU,
+    replies: [{ type: 'text', text: `Thanks ${name}! You're all set. 🎉` }, ...menu.MAIN_MENU],
+  };
+};
+
+const handleKYCLocation = async ({ text, customer, phone }) => {
+  const location = text.trim();
+  if (location.length < 2) {
+    return {
+      nextState: STATES.KYC_LOCATION,
+      replies: [{ type: 'text', text: 'Please enter your area or estate name.' }],
+    };
+  }
+  // Save to DB
+  await query(`UPDATE customers SET location = $1 WHERE phone = $2`, [location, phone]);
+
+  // Update CRM
+  const crmPersonId = await crm.findPersonByPhone(phone).then((p) => p?.id).catch(() => null);
+  if (crmPersonId) await crm.updatePerson(crmPersonId, { location });
+
+  const name = customer.name || 'there';
+  return {
+    nextState: STATES.MAIN_MENU,
+    replies: [
+      { type: 'text', text: `Got it — *${location}*. We now have your full details on file. 📋` },
+      ...menu.MAIN_MENU,
+    ],
+  };
+};
+
+// ─── Admin command handler ─────────────────────────────────────────────────────
 
 const parseAdminCommand = (text) => {
   const match = text.trim().match(/^(TICKET|ORDER)#(\d+)\s+(\w+)(?:\s+(.+))?$/i);
   if (!match) return null;
-  return {
-    type:   match[1].toUpperCase(),
-    id:     parseInt(match[2], 10),
-    action: match[3].toUpperCase(),
-    extra:  match[4] || null,
-  };
+  return { type: match[1].toUpperCase(), id: parseInt(match[2], 10), action: match[3].toUpperCase(), extra: match[4] || null };
 };
 
 const handleAdminCommand = async ({ cmd, phone }) => {
   const adminPhones = (process.env.ADMIN_PHONES || '').split(',').map((p) => p.trim());
   if (!adminPhones.includes(phone)) return null;
-
   let reply = null;
 
   if (cmd.type === 'TICKET') {
-    const statusMap = {
-      RESOLVED:    ticketService.TICKET_STATUS.RESOLVED,
-      CLOSED:      ticketService.TICKET_STATUS.CLOSED,
-      IN_PROGRESS: ticketService.TICKET_STATUS.IN_PROGRESS,
-      ASSIGNED:    ticketService.TICKET_STATUS.IN_PROGRESS,
-    };
+    const statusMap = { RESOLVED: ticketService.TICKET_STATUS.RESOLVED, CLOSED: ticketService.TICKET_STATUS.CLOSED, IN_PROGRESS: ticketService.TICKET_STATUS.IN_PROGRESS, ASSIGNED: ticketService.TICKET_STATUS.IN_PROGRESS };
     const status = statusMap[cmd.action];
     if (status) {
       const ticket = await ticketService.updateStatus(cmd.id, status, cmd.extra);
       if (ticket) {
-        await whatsapp.sendText(
-          ticket.phone,
-          'Update on your support ticket #' + ticket.id + ':\nStatus: ' + status.replace('_', ' ').toUpperCase() +
-          (cmd.extra ? '\nTechnician: ' + cmd.extra : '') +
-          '\n\nThank you for your patience. - Laitor Support'
-        );
-        reply = 'Ticket #' + cmd.id + ' updated to ' + status;
-      } else {
-        reply = 'Ticket #' + cmd.id + ' not found';
-      }
+        await whatsapp.sendText(ticket.phone, 'Update on your support ticket #' + ticket.id + ':\nStatus: ' + status.replace('_', ' ') + (cmd.extra ? '\nTechnician: ' + cmd.extra : '') + '\n\nThank you for your patience. - Laitor Support');
+        reply = 'Ticket #' + cmd.id + ' → ' + status;
+      } else { reply = 'Ticket #' + cmd.id + ' not found'; }
     }
   }
 
   if (cmd.type === 'ORDER') {
-    const statusMap = {
-      CONFIRMED:  orderService.ORDER_STATUS.CONFIRMED,
-      PROCESSING: orderService.ORDER_STATUS.PROCESSING,
-      FULFILLED:  orderService.ORDER_STATUS.FULFILLED,
-      CANCELLED:  orderService.ORDER_STATUS.CANCELLED,
-    };
+    const statusMap = { CONFIRMED: orderService.ORDER_STATUS.CONFIRMED, PROCESSING: orderService.ORDER_STATUS.PROCESSING, FULFILLED: orderService.ORDER_STATUS.FULFILLED, CANCELLED: orderService.ORDER_STATUS.CANCELLED };
     const status = statusMap[cmd.action];
     if (status) {
       const order = await orderService.updateStatus(cmd.id, status);
@@ -126,278 +181,92 @@ const handleAdminCommand = async ({ cmd, phone }) => {
           const customerKey = await manager.upsertCustomer({ phone: order.phone, name: order.phone });
           await manager.createInvoice({ customerKey, orderId: order.id, product: order.product, phone: order.phone });
         }
-        await whatsapp.sendText(
-          order.phone,
-          'Update on your order #' + order.id + ':\nProduct: ' + order.product + '\nStatus: ' + status.toUpperCase() +
-          '\n\nThank you for choosing Laitor! - Laitor Team'
-        );
-        reply = 'Order #' + cmd.id + ' updated to ' + status;
-      } else {
-        reply = 'Order #' + cmd.id + ' not found';
-      }
+        await whatsapp.sendText(order.phone, 'Update on your order #' + order.id + ':\nProduct: ' + order.product + '\nStatus: ' + status.toUpperCase() + '\n\nThank you for choosing Laitor! - Laitor Team');
+        reply = 'Order #' + cmd.id + ' → ' + status;
+      } else { reply = 'Order #' + cmd.id + ' not found'; }
     }
   }
-
   return reply;
 };
 
-// ─── State handlers ───────────────────────────────────────────────────────────
+// ─── Main menu handler ─────────────────────────────────────────────────────────
 
-/**
- * STEP 1 — Consent gate.
- * New contacts always get the consent message first.
- * On reply: 1/yes → give consent, show main menu.
- *           2/no/stop → deny consent, send opt-out confirmation.
- */
-const handleConsentState = async ({ customer, text, phone }) => {
-  const consentReply = consent.parseConsentReply(text);
+const handleMainMenu = async ({ text }) => {
+  const choice = text.trim().replace(/[^0-9]/g, '');
+  if (choice === '1') {
+    const cat = await catalog.getCatalog();
+    const internet = catalog.splitByType(cat).internet;
+    return { nextState: STATES.INTERNET_BROWSE, replies: menu.buildInternetMenu(internet), sessionData: { catalogInternet: internet } };
+  }
+  if (choice === '2') {
+    const cat = await catalog.getCatalog();
+    const products = catalog.splitByType(cat).products;
+    return { nextState: STATES.PRODUCT_BROWSE, replies: menu.buildProductMenu(products), sessionData: { catalogProducts: products } };
+  }
+  if (choice === '3') return { nextState: STATES.SUPPORT_AWAIT, replies: menu.SUPPORT_PROMPT };
+  if (choice === '4') return { nextState: STATES.AGENT_HANDOFF, replies: menu.AGENT_HANDOFF };
+  return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+};
 
-  if (consentReply === consent.CONSENT_STATUS.GIVEN) {
-    await consent.giveConsent(phone);
-    // Update customer in DB
-    await query(
-      `UPDATE customers SET consent_status = 'given', consented_at = NOW() WHERE phone = $1`,
-      [phone]
-    );
-    // Show main menu after a short welcome
-    const name = customer.name || 'there';
+const handleInternetBrowse = async ({ text, sess }) => {
+  const choice = parseInt(text.trim(), 10);
+  if (choice === 0 || /^menu$/i.test(text.trim())) return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+  let items = sess.catalogInternet;
+  if (!items) { const cat = await catalog.getCatalog(); items = catalog.splitByType(cat).internet; }
+  const selected = catalog.getByIndex(items, choice);
+  if (!selected) return { nextState: STATES.INTERNET_BROWSE, replies: [{ type: 'text', text: `Please select a number between 1 and ${items.length}, or 0 to go back.` }], sessionData: { catalogInternet: items } };
+  return { nextState: STATES.INTERNET_CONFIRM, replies: menu.buildConfirmMenu(selected.name, selected.price), sessionData: { pendingItem: selected, catalogInternet: items } };
+};
+
+const handleProductBrowse = async ({ text, sess }) => {
+  const choice = parseInt(text.trim(), 10);
+  if (choice === 0 || /^menu$/i.test(text.trim())) return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+  let items = sess.catalogProducts;
+  if (!items) { const cat = await catalog.getCatalog(); items = catalog.splitByType(cat).products; }
+  const selected = catalog.getByIndex(items, choice);
+  if (!selected) return { nextState: STATES.PRODUCT_BROWSE, replies: [{ type: 'text', text: `Please select a number between 1 and ${items.length}, or 0 to go back.` }], sessionData: { catalogProducts: items } };
+  return { nextState: STATES.PRODUCT_CONFIRM, replies: menu.buildConfirmMenu(selected.name, selected.price), sessionData: { pendingItem: selected, catalogProducts: items } };
+};
+
+const handleConfirm = async ({ text, customer, phone, name, sess, orderType }) => {
+  const choice = text.trim().replace(/[^0-9]/g, '');
+  if (choice === '2' || /^cancel$/i.test(text.trim())) {
+    const items = orderType === 'internet' ? sess.catalogInternet : sess.catalogProducts;
+    return { nextState: orderType === 'internet' ? STATES.INTERNET_BROWSE : STATES.PRODUCT_BROWSE, replies: orderType === 'internet' ? menu.buildInternetMenu(items || []) : menu.buildProductMenu(items || []) };
+  }
+  if (choice === '1') {
+    const item = sess.pendingItem;
+    if (!item) return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+    let order = null;
+    if (customer.id) order = await orderService.create({ customerId: customer.id, product: item.name, notes: item.name });
+    await syncToCRM({ phone, name, type: orderType === 'internet' ? 'INTERNET_LEAD' : 'PRODUCT_ORDER', notes: item.name });
+    await admin.notifyNewOrder({ orderId: order?.id || '?', phone, name, product: item.name, notes: `KES ${item.price || 'TBD'}` });
     return {
       nextState: STATES.MAIN_MENU,
       replies: [
-        `Thank you, ${name}! You are now connected to *Laitor Invest*. 🎉`,
+        { type: 'text', text: `✅ Order confirmed for: *${item.name}*\n\nOur team will reach out to arrange delivery or installation.\n\nRef: *#${order?.id || 'WA-' + Date.now()}*` },
         ...menu.MAIN_MENU,
       ],
     };
   }
-
-  if (consentReply === consent.CONSENT_STATUS.DENIED) {
-    await consent.denyConsent(phone);
-    await query(
-      `UPDATE customers SET consent_status = 'denied' WHERE phone = $1`,
-      [phone]
-    );
-    return {
-      nextState: STATES.CONSENT_PENDING,
-      replies: menu.OPT_OUT_CONFIRM,
-    };
-  }
-
-  // Unrecognised reply — resend consent message
-  return {
-    nextState: STATES.CONSENT_PENDING,
-    replies: [
-      'Please reply *1* to accept or *2* to opt out.',
-    ],
-  };
+  return { nextState: orderType === 'internet' ? STATES.INTERNET_CONFIRM : STATES.PRODUCT_CONFIRM, replies: [{ type: 'text', text: 'Please tap *Confirm Order* or *Cancel*.' }] };
 };
 
-/**
- * STEP 2 — Main menu navigation.
- * 1 → Internet packages
- * 2 → Products
- * 3 → Support
- * 4 → Agent
- */
-const handleMainMenu = async ({ text }) => {
-  const choice = text.trim().replace(/[^0-9]/g, '');
-
-  if (choice === '1') {
-    const cat = await catalog.getCatalog();
-    const internet = catalog.splitByType(cat).internet;
-    return {
-      nextState: STATES.INTERNET_BROWSE,
-      replies: menu.buildInternetMenu(internet),
-      sessionData: { catalogInternet: internet },
-    };
-  }
-
-  if (choice === '2') {
-    const cat = await catalog.getCatalog();
-    const products = catalog.splitByType(cat).products;
-    return {
-      nextState: STATES.PRODUCT_BROWSE,
-      replies: menu.buildProductMenu(products),
-      sessionData: { catalogProducts: products },
-    };
-  }
-
-  if (choice === '3') {
-    return {
-      nextState: STATES.SUPPORT_AWAIT,
-      replies: menu.SUPPORT_PROMPT,
-    };
-  }
-
-  if (choice === '4') {
-    return {
-      nextState: STATES.AGENT_HANDOFF,
-      replies: menu.AGENT_HANDOFF,
-    };
-  }
-
-  // Unrecognised — re-show menu
-  return {
-    nextState: STATES.MAIN_MENU,
-    replies: ['Please reply with a number:\n\n' + menu.MAIN_MENU[1]],
-  };
-};
-
-/**
- * STEP 3a — Internet package browse.
- * User replies with a number to select, or 0 to go back.
- */
-const handleInternetBrowse = async ({ text, customer, phone, name, sess }) => {
-  const choice = parseInt(text.trim(), 10);
-
-  if (choice === 0 || text.toLowerCase() === 'menu') {
-    return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
-  }
-
-  // Re-fetch catalog if not in session
-  let items = sess.catalogInternet;
-  if (!items) {
-    const cat = await catalog.getCatalog();
-    items = catalog.splitByType(cat).internet;
-  }
-
-  const selected = catalog.getByIndex(items, choice);
-  if (!selected) {
-    return {
-      nextState: STATES.INTERNET_BROWSE,
-      replies: [
-        `Please reply with a number between 1 and ${items.length}, or *0* to go back.`,
-      ],
-      sessionData: { catalogInternet: items },
-    };
-  }
-
-  return {
-    nextState: STATES.INTERNET_CONFIRM,
-    replies: menu.buildConfirmMenu(selected.name, selected.price),
-    sessionData: { pendingItem: selected, catalogInternet: items },
-  };
-};
-
-/**
- * STEP 3b — Product browse.
- */
-const handleProductBrowse = async ({ text, customer, phone, name, sess }) => {
-  const choice = parseInt(text.trim(), 10);
-
-  if (choice === 0 || text.toLowerCase() === 'menu') {
-    return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
-  }
-
-  let items = sess.catalogProducts;
-  if (!items) {
-    const cat = await catalog.getCatalog();
-    items = catalog.splitByType(cat).products;
-  }
-
-  const selected = catalog.getByIndex(items, choice);
-  if (!selected) {
-    return {
-      nextState: STATES.PRODUCT_BROWSE,
-      replies: [
-        `Please reply with a number between 1 and ${items.length}, or *0* to go back.`,
-      ],
-      sessionData: { catalogProducts: items },
-    };
-  }
-
-  return {
-    nextState: STATES.PRODUCT_CONFIRM,
-    replies: menu.buildConfirmMenu(selected.name, selected.price),
-    sessionData: { pendingItem: selected, catalogProducts: items },
-  };
-};
-
-/**
- * STEP 4 — Confirm order (internet or product).
- */
-const handleConfirm = async ({ text, customer, phone, name, sess, orderType }) => {
-  const choice = text.trim().replace(/[^0-9]/g, '');
-
-  if (choice === '2' || text.toLowerCase() === 'cancel') {
-    const browseState = orderType === 'internet' ? STATES.INTERNET_BROWSE : STATES.PRODUCT_BROWSE;
-    const items = orderType === 'internet' ? sess.catalogInternet : sess.catalogProducts;
-    const browseMenu = orderType === 'internet'
-      ? menu.buildInternetMenu(items || [])
-      : menu.buildProductMenu(items || []);
-    return { nextState: browseState, replies: browseMenu };
-  }
-
-  if (choice === '1') {
-    const item = sess.pendingItem;
-    if (!item) {
-      return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
-    }
-
-    // Create order
-    let order = null;
-    if (customer.id) {
-      order = await orderService.create({ customerId: customer.id, product: item.name, notes: item.name });
-    }
-
-    // Sync to CRM
-    await syncToCRM({ phone, name, type: orderType === 'internet' ? 'INTERNET_LEAD' : 'PRODUCT_ORDER', notes: item.name });
-
-    // Notify admin
-    await admin.notifyNewOrder({
-      orderId: order ? order.id : '?',
-      phone,
-      name,
-      product: item.name,
-      notes: `Selected from catalog via WhatsApp. Price: KES ${item.price || 'TBD'}`,
-    });
-
-    logger.info('Order placed from catalog', { phone, item: item.name, orderId: order?.id });
-
-    return {
-      nextState: STATES.MAIN_MENU,
-      replies: [
-        `✅ Order confirmed for: *${item.name}*\n\nOur team will reach out to you shortly to arrange delivery or installation.\n\nOrder reference: *#${order?.id || 'WA-' + Date.now()}*`,
-        'Is there anything else we can help you with?\n\n' + menu.MAIN_MENU[1],
-      ],
-    };
-  }
-
-  // Unrecognised
-  return {
-    nextState: orderType === 'internet' ? STATES.INTERNET_CONFIRM : STATES.PRODUCT_CONFIRM,
-    replies: ['Please reply *1* to confirm or *2* to cancel.'],
-  };
-};
-
-/**
- * STEP 5 — Support: capture issue description, create ticket.
- */
 const handleSupportAwait = async ({ text, customer, phone, name }) => {
   let ticket = null;
-  if (customer.id) {
-    ticket = await ticketService.create({ customerId: customer.id, issue: text });
-  }
-
+  if (customer.id) ticket = await ticketService.create({ customerId: customer.id, issue: text });
   await syncToCRM({ phone, name, type: 'SUPPORT_REQUEST', notes: text });
-
-  await admin.notifyNewTicket({
-    ticketId: ticket ? ticket.id : '?',
-    phone,
-    name,
-    issue: text,
-    priority: ticket ? ticket.priority : 'medium',
-  });
-
+  await admin.notifyNewTicket({ ticketId: ticket?.id || '?', phone, name, issue: text, priority: ticket?.priority || 'medium' });
   return {
     nextState: STATES.MAIN_MENU,
     replies: [
-      `✅ Support ticket *#${ticket?.id || '?'}* logged.\n\nOur technical team has been notified and will reach out to you shortly.`,
-      'Is there anything else we can help you with?\n\n' + menu.MAIN_MENU[1],
+      { type: 'text', text: `✅ Support ticket *#${ticket?.id || '?'}* logged.\n\nOur technical team will reach out to you shortly.` },
+      ...menu.MAIN_MENU,
     ],
   };
 };
 
-// ─── Main process function ────────────────────────────────────────────────────
+// ─── Main process ──────────────────────────────────────────────────────────────
 
 const process = async (msg) => {
   const { phone, name, text, msgId, raw } = msg;
@@ -409,13 +278,10 @@ const process = async (msg) => {
   const cmd = parseAdminCommand(text);
   if (cmd) {
     const adminReply = await handleAdminCommand({ cmd, phone });
-    if (adminReply) {
-      await whatsapp.sendText(phone, adminReply);
-      return;
-    }
+    if (adminReply) { await whatsapp.sendText(phone, adminReply); return; }
   }
 
-  // Global opt-out keyword
+  // Global opt-out
   if (/^stop$/i.test(text.trim())) {
     await consent.denyConsent(phone);
     await query(`UPDATE customers SET consent_status = 'denied' WHERE phone = $1`, [phone]);
@@ -423,109 +289,143 @@ const process = async (msg) => {
     return;
   }
 
-  // Global menu reset keyword
   const wantsMenu = /^(menu|hi|hello|hujambo|habari|start)$/i.test(text.trim());
 
+  // ── Upsert customer ──────────────────────────────────────────────────────────
+  // Key rule: inbound contacts (messaging us first) get consent = 'given' automatically.
+  // Only imported contacts (source='import') need explicit consent.
   let customer = { id: null, phone };
   try {
-    customer = await upsertCustomer(phone, name);
+    // Check if they already exist
+    const existing = await query(`SELECT * FROM customers WHERE phone = $1`, [phone]);
+
+    if (existing.rows.length > 0) {
+      customer = existing.rows[0];
+      // If they exist but source is NOT import, ensure consent is given
+      if (customer.source !== 'import' && customer.consent_status === 'pending') {
+        await query(`UPDATE customers SET consent_status = 'given' WHERE phone = $1`, [phone]);
+        customer.consent_status = 'given';
+      }
+    } else {
+      // Brand new inbound contact — create with consent given
+      const res = await query(
+        `INSERT INTO customers (phone, name, source, consent_status)
+         VALUES ($1, $2, 'inbound', 'given')
+         ON CONFLICT (phone) DO UPDATE SET
+           name = COALESCE(EXCLUDED.name, customers.name), updated_at = NOW()
+         RETURNING *`,
+        [phone, name || null]
+      );
+      customer = res.rows[0];
+    }
   } catch (err) {
     logger.error('Customer upsert failed', { phone, error: err.message });
   }
 
   const consentStatus = customer.consent_status || 'pending';
+  const sess = await session.get(phone);
 
-  // ── Consent gate: if not given, only handle consent replies ─────────────────
+  // ── CONSENT GATE (imported contacts only) ───────────────────────────────────
   if (consentStatus !== 'given') {
     if (consentStatus === 'denied') {
-      // Silently ignore — they opted out
       logger.info('Message from opted-out contact ignored', { phone });
       return;
     }
 
-    // pending — send consent request if first contact, or handle consent reply
-    const sess = await session.get(phone);
-
+    // pending → only imports reach here
     if (!sess.consentSent) {
-      // First message — send consent request
       await whatsapp.sendSequence(phone, consent.CONSENT_MESSAGE);
       await session.set(phone, { ...sess, state: STATES.CONSENT_PENDING, consentSent: true, customerId: customer.id });
     } else {
-      // They replied to consent message
-      const result = await handleConsentState({ customer, text, phone });
-      await session.set(phone, { state: result.nextState, customerId: customer.id, ...(result.sessionData || {}) });
-      await whatsapp.sendSequence(phone, result.replies);
+      // Handle their consent reply
+      const consentReply = consent.parseConsentReply(text);
+      if (consentReply === consent.CONSENT_STATUS.GIVEN) {
+        await consent.giveConsent(phone);
+        await query(`UPDATE customers SET consent_status = 'given', consented_at = NOW() WHERE phone = $1`, [phone]);
+        const updatedCustomer = { ...customer, consent_status: 'given' };
+        const nextField = nextKYCField(updatedCustomer);
+        if (nextField === 'name') {
+          await whatsapp.sendText(phone, `Thank you for accepting! 🎉\n\nTo serve you better, what is your full name?`);
+          await session.set(phone, { state: STATES.KYC_NAME, customerId: customer.id });
+        } else if (nextField === 'location') {
+          await whatsapp.sendText(phone, `Thank you! 🎉\n\nWhich area or estate are you in?`);
+          await session.set(phone, { state: STATES.KYC_LOCATION, customerId: customer.id });
+        } else {
+          await whatsapp.sendSequence(phone, [{ type: 'text', text: 'Thank you! You are now connected to *Laitor Invest*. 🎉' }, ...menu.MAIN_MENU]);
+          await session.set(phone, { state: STATES.MAIN_MENU, customerId: customer.id });
+        }
+      } else if (consentReply === consent.CONSENT_STATUS.DENIED) {
+        await consent.denyConsent(phone);
+        await query(`UPDATE customers SET consent_status = 'denied' WHERE phone = $1`, [phone]);
+        await whatsapp.sendSequence(phone, menu.OPT_OUT_CONFIRM);
+      } else {
+        await whatsapp.sendText(phone, 'Please tap *Yes, I accept* or *No, opt out*.');
+        await session.set(phone, { ...sess, state: STATES.CONSENT_PENDING });
+      }
     }
-
     return;
   }
 
-  // ── Consent given — run state machine ───────────────────────────────────────
-  const sess = await session.get(phone);
+  // ── CONSENTED — run state machine ────────────────────────────────────────────
   const currentState = sess.state || STATES.MAIN_MENU;
+
+  // KYC check: on first interaction after consent, collect missing info
+  if (!sess.kycDone && !wantsMenu && currentState === STATES.MAIN_MENU) {
+    const nextField = nextKYCField(customer);
+    if (nextField === 'name') {
+      await whatsapp.sendText(phone, `Hello! 👋 To serve you better, could you tell us your full name?`);
+      await session.set(phone, { ...sess, state: STATES.KYC_NAME, customerId: customer.id });
+      return;
+    }
+    if (nextField === 'location') {
+      await whatsapp.sendText(phone, `Hi ${customer.name}! 👋 Which area or estate are you located in?`);
+      await session.set(phone, { ...sess, state: STATES.KYC_LOCATION, customerId: customer.id });
+      return;
+    }
+    // KYC complete — mark so we don't check again this session
+    await session.set(phone, { ...sess, kycDone: true });
+  }
 
   let result;
 
   try {
     if (wantsMenu) {
       result = { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
-
+    } else if (currentState === STATES.KYC_NAME) {
+      result = await handleKYCName({ text, customer, phone });
+    } else if (currentState === STATES.KYC_LOCATION) {
+      result = await handleKYCLocation({ text, customer, phone });
     } else if (currentState === STATES.MAIN_MENU) {
       result = await handleMainMenu({ text });
-
     } else if (currentState === STATES.INTERNET_BROWSE) {
-      result = await handleInternetBrowse({ text, customer, phone, name, sess });
-
+      result = await handleInternetBrowse({ text, sess });
     } else if (currentState === STATES.PRODUCT_BROWSE) {
-      result = await handleProductBrowse({ text, customer, phone, name, sess });
-
+      result = await handleProductBrowse({ text, sess });
     } else if (currentState === STATES.INTERNET_CONFIRM) {
       result = await handleConfirm({ text, customer, phone, name, sess, orderType: 'internet' });
-
     } else if (currentState === STATES.PRODUCT_CONFIRM) {
       result = await handleConfirm({ text, customer, phone, name, sess, orderType: 'product' });
-
     } else if (currentState === STATES.SUPPORT_AWAIT) {
       result = await handleSupportAwait({ text, customer, phone, name });
-
     } else if (currentState === STATES.AGENT_HANDOFF) {
-      // In agent handoff — just log, don't auto-reply
-      logger.info('Message in agent handoff state (not auto-replied)', { phone });
+      logger.info('Message in agent handoff — not auto-replied', { phone });
       return;
-
     } else {
-      // Unknown state — reset to main menu
       result = { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
     }
   } catch (err) {
     logger.error('Orchestrator handler error', { phone, error: err.message, stack: err.stack });
-    result = {
-      nextState: STATES.MAIN_MENU,
-      replies: ['We encountered an issue. Please try again.\n\nType *MENU* to return to the main menu.'],
-    };
+    result = { nextState: STATES.MAIN_MENU, replies: [{ type: 'text', text: 'We encountered an issue. Type *MENU* to try again.' }] };
   }
 
-  // Merge session data
-  const newSess = {
-    ...sess,
-    state: result.nextState,
-    lastMessage: text,
-    customerId: customer.id,
-    ...(result.sessionData || {}),
-  };
+  const newSess = { ...sess, state: result.nextState, lastMessage: text, customerId: customer.id, kycDone: result.nextState !== STATES.KYC_NAME && result.nextState !== STATES.KYC_LOCATION ? (sess.kycDone || result.nextState === STATES.MAIN_MENU) : false, ...(result.sessionData || {}) };
   await session.set(phone, newSess);
 
-  // Send replies
   try {
     await whatsapp.sendSequence(phone, result.replies);
     for (const r of result.replies) {
-      await logMessage({
-        phone,
-        direction: 'out',
-        text: r,
-        raw: { automated: true },
-        msgId: 'out-' + msgId + '-' + Date.now(),
-      });
+      const textContent = typeof r === 'string' ? r : r.text || r.body || r.title || JSON.stringify(r);
+      await logMessage({ phone, direction: 'out', text: textContent, raw: { automated: true }, msgId: 'out-' + msgId + '-' + Date.now() });
     }
   } catch (err) {
     logger.error('Failed to send WhatsApp reply', { phone, error: err.message });
