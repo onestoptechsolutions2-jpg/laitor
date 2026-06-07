@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Laitor Admin</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --border: #2a2d3e;
+    --accent: #4f8ef7;
+    --green: #22c55e;
+    --yellow: #eab308;
+    --red: #ef4444;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; }
+  a { color: var(--accent); text-decoration: none; }
+
+  /* Layout */
+  .app { display: flex; min-height: 100vh; }
+  .sidebar { width: 220px; background: var(--surface); border-right: 1px solid var(--border); padding: 20px 0; flex-shrink: 0; display: flex; flex-direction: column; }
+  .sidebar-logo { padding: 0 20px 24px; font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: -.3px; }
+  .sidebar-logo span { color: var(--text); }
+  .sidebar-nav a { display: flex; align-items: center; gap: 10px; padding: 10px 20px; color: var(--muted); transition: all .15s; cursor: pointer; border-left: 3px solid transparent; }
+  .sidebar-nav a:hover, .sidebar-nav a.active { color: var(--text); background: rgba(79,142,247,.08); border-left-color: var(--accent); }
+  .sidebar-nav a svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .main { flex: 1; overflow: auto; }
+  .topbar { padding: 20px 28px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; background: var(--surface); }
+  .topbar h1 { font-size: 16px; font-weight: 600; }
+  .topbar-actions { display: flex; gap: 10px; }
+  .content { padding: 28px; }
+
+  /* Cards */
+  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px,1fr)); gap: 16px; margin-bottom: 28px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
+  .stat-card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+  .stat-card .value { font-size: 28px; font-weight: 700; }
+  .stat-card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+  /* Table */
+  .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .table-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .table-header h2 { font-size: 14px; font-weight: 600; }
+  .table-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+  table { width: 100%; border-collapse: collapse; }
+  th { padding: 10px 16px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); border-bottom: 1px solid var(--border); background: rgba(0,0,0,.2); }
+  td { padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,.02); }
+
+  /* Badges */
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+  .badge-green { background: rgba(34,197,94,.15); color: var(--green); }
+  .badge-yellow { background: rgba(234,179,8,.15); color: var(--yellow); }
+  .badge-red { background: rgba(239,68,68,.15); color: var(--red); }
+  .badge-blue { background: rgba(79,142,247,.15); color: var(--accent); }
+  .badge-grey { background: rgba(148,163,184,.15); color: var(--muted); }
+
+  /* Buttons */
+  .btn { padding: 7px 14px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-weight: 500; transition: opacity .15s; }
+  .btn:hover { opacity: .85; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-outline { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+  .btn-danger { background: var(--red); color: #fff; }
+
+  /* Form */
+  input[type=text], input[type=file], select, textarea {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); padding: 7px 11px; font-size: 13px; outline: none; width: 100%;
+  }
+  input[type=text]:focus, select:focus { border-color: var(--accent); }
+
+  .search-input { width: 220px; }
+
+  /* Sections */
+  .section { display: none; }
+  .section.active { display: block; }
+
+  /* Upload zone */
+  .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius); padding: 32px; text-align: center; cursor: pointer; transition: border-color .15s; }
+  .upload-zone:hover { border-color: var(--accent); }
+  .upload-zone p { color: var(--muted); margin-top: 8px; font-size: 13px; }
+
+  /* Pill row */
+  .pill-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .pill { padding: 5px 14px; border-radius: 99px; border: 1px solid var(--border); font-size: 12px; cursor: pointer; color: var(--muted); transition: all .15s; }
+  .pill:hover, .pill.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* Toast */
+  #toast { position: fixed; bottom: 24px; right: 24px; background: #1e293b; border: 1px solid var(--border); border-radius: 8px; padding: 12px 18px; font-size: 13px; display: none; z-index: 999; max-width: 320px; }
+  #toast.show { display: block; }
+
+  /* Source bars */
+  .source-bar { margin-bottom: 8px; }
+  .source-bar .label-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+  .bar-bg { background: var(--border); border-radius: 99px; height: 6px; }
+  .bar-fill { background: var(--accent); border-radius: 99px; height: 6px; transition: width .6s; }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">Laitor<span> Admin</span></div>
+    <div class="sidebar-nav">
+      <a class="active" onclick="nav('dashboard',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        Dashboard
+      </a>
+      <a onclick="nav('contacts',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        Contacts
+      </a>
+      <a onclick="nav('orders',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+        Orders
+      </a>
+      <a onclick="nav('tickets',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 10c-.83 0-1.5-.67-1.5-1.5v-5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5z"/><path d="M20.5 10H19V8.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/><path d="M9.5 14c.83 0 1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5S8 21.33 8 20.5v-5c0-.83.67-1.5 1.5-1.5z"/><path d="M3.5 14H5v1.5c0 .83-.67 1.5-1.5 1.5S2 16.33 2 15.5 2.67 14 3.5 14z"/><path d="M14 14.5c0-.83.67-1.5 1.5-1.5h5c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5h-5c-.83 0-1.5-.67-1.5-1.5z"/><path d="M15.5 19H14v1.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5-.67-1.5-1.5-1.5z"/><path d="M10 9.5C10 8.67 9.33 8 8.5 8h-5C2.67 8 2 8.67 2 9.5S2.67 11 3.5 11h5c.83 0 1.5-.67 1.5-1.5z"/><path d="M8.5 5H10V3.5C10 2.67 9.33 2 8.5 2S7 2.67 7 3.5 7.67 5 8.5 5z"/></svg>
+        Tickets
+      </a>
+      <a onclick="nav('outreach',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        Outreach
+      </a>
+      <a onclick="nav('catalog',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+        Catalog
+      </a>
+      <a onclick="nav('addlead',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+        Add Lead
+      </a>
+    </div>
+  </nav>
+
+  <div class="main">
+    <!-- Dashboard -->
+    <section id="dashboard" class="section active">
+      <div class="topbar"><h1>Dashboard</h1><button class="btn btn-outline btn-sm" onclick="loadDashboard()">↻ Refresh</button></div>
+      <div class="content">
+        <div class="stats" id="stat-cards">
+          <div class="stat-card"><div class="label">Contacts</div><div class="value" id="s-customers">—</div></div>
+          <div class="stat-card"><div class="label">Consented</div><div class="value" id="s-consented">—</div></div>
+          <div class="stat-card"><div class="label">Total Leads</div><div class="value" id="s-leads">—</div></div>
+          <div class="stat-card"><div class="label">Open Orders</div><div class="value" id="s-orders">—</div></div>
+          <div class="stat-card"><div class="label">Open Tickets</div><div class="value" id="s-tickets">—</div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px">
+          <div class="table-wrap" style="padding:20px">
+            <h2 style="margin-bottom:16px;font-size:13px;font-weight:600">Leads by Source</h2>
+            <div id="source-bars"></div>
+          </div>
+          <div class="table-wrap">
+            <div class="table-header"><h2>Recent Leads</h2></div>
+            <table><thead><tr><th>Phone</th><th>Name</th><th>Source</th><th>Type</th><th>Time</th></tr></thead>
+            <tbody id="recent-leads"></tbody></table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Contacts -->
+    <section id="contacts" class="section">
+      <div class="topbar"><h1>Contacts</h1>
+        <div class="topbar-actions">
+          <input type="text" class="search-input" placeholder="Search phone or name…" id="contact-search" oninput="loadContacts()">
+          <select id="contact-consent" onchange="loadContacts()" style="width:140px">
+            <option value="">All consent</option>
+            <option value="pending">Pending</option>
+            <option value="given">Consented</option>
+            <option value="denied">Opted out</option>
+          </select>
+          <label class="btn btn-primary btn-sm" style="cursor:pointer">
+            📂 Import Excel
+            <input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importContacts(this)">
+          </label>
+        </div>
+      </div>
+      <div class="content">
+        <div class="table-wrap">
+          <table><thead><tr><th>Phone</th><th>Name</th><th>Source</th><th>Service</th><th>Territory</th><th>Consent</th><th>Joined</th></tr></thead>
+          <tbody id="contacts-body"></tbody></table>
+          <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:center">
+            <button class="btn btn-outline btn-sm" onclick="contactPage(-1)">← Prev</button>
+            <span id="contact-pager" style="color:var(--muted);font-size:12px"></span>
+            <button class="btn btn-outline btn-sm" onclick="contactPage(1)">Next →</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Orders -->
+    <section id="orders" class="section">
+      <div class="topbar"><h1>Orders</h1>
+        <select id="order-status" onchange="loadOrders()" style="width:160px">
+          <option value="">All statuses</option>
+          <option value="pending">Pending</option>
+          <option value="processing">Processing</option>
+          <option value="confirmed">Confirmed</option>
+          <option value="fulfilled">Fulfilled</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+      <div class="content">
+        <div class="table-wrap">
+          <table><thead><tr><th>ID</th><th>Phone</th><th>Name</th><th>Product</th><th>Status</th><th>Created</th></tr></thead>
+          <tbody id="orders-body"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tickets -->
+    <section id="tickets" class="section">
+      <div class="topbar"><h1>Support Tickets</h1>
+        <select id="ticket-status" onchange="loadTickets()" style="width:160px">
+          <option value="">Open only</option>
+          <option value="open">Open</option>
+          <option value="in_progress">In Progress</option>
+          <option value="resolved">Resolved</option>
+          <option value="closed">Closed</option>
+        </select>
+      </div>
+      <div class="content">
+        <div class="table-wrap">
+          <table><thead><tr><th>ID</th><th>Phone</th><th>Name</th><th>Issue</th><th>Priority</th><th>Status</th><th>Technician</th><th>Created</th></tr></thead>
+          <tbody id="tickets-body"></tbody></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Outreach -->
+    <section id="outreach" class="section">
+      <div class="topbar"><h1>Outreach Blast</h1></div>
+      <div class="content">
+        <div class="table-wrap" style="padding:24px;max-width:500px">
+          <h2 style="margin-bottom:20px;font-size:14px">Send Consent Requests</h2>
+          <div style="margin-bottom:14px">
+            <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:5px">Territory (optional)</label>
+            <input type="text" id="blast-territory" placeholder="e.g. Nairobi West">
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:5px">Cluster (optional)</label>
+            <input type="text" id="blast-cluster" placeholder="e.g. Cluster A">
+          </div>
+          <div style="margin-bottom:20px;padding:14px;background:rgba(79,142,247,.08);border-radius:8px;font-size:13px;color:var(--muted)">
+            Pending contacts: <strong id="pending-count" style="color:var(--text)">—</strong>
+            <button class="btn btn-outline btn-sm" style="margin-left:10px" onclick="loadPendingCount()">Check</button>
+          </div>
+          <button class="btn btn-primary" onclick="runBlast()" id="blast-btn">🚀 Send Blast</button>
+          <div id="blast-result" style="margin-top:16px;display:none"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Catalog -->
+    <section id="catalog" class="section">
+      <div class="topbar"><h1>Product Catalog</h1>
+        <button class="btn btn-outline btn-sm" onclick="refreshCatalog()">↻ Refresh from Manager.io</button>
+      </div>
+      <div class="content">
+        <div class="pill-row" id="catalog-filters">
+          <div class="pill active" onclick="filterCatalog('all',this)">All</div>
+          <div class="pill" onclick="filterCatalog('internet',this)">Internet</div>
+          <div class="pill" onclick="filterCatalog('product',this)">Products</div>
+        </div>
+        <div class="table-wrap">
+          <table><thead><tr><th>Name</th><th>Type</th><th>Price (KES)</th><th>Description</th></tr></thead>
+          <tbody id="catalog-body"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Add Lead -->
+    <section id="addlead" class="section">
+      <div class="topbar"><h1>Add Lead</h1></div>
+      <div class="content">
+        <div class="table-wrap" style="padding:24px;max-width:520px">
+          <h2 style="margin-bottom:20px;font-size:14px">New Lead (Website / Referral / Walk-in / Social)</h2>
+          <div style="display:grid;gap:14px">
+            <div>
+              <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:5px">Phone *</label>
+              <input type="text" id="nl-phone" placeholder="07XX XXX XXX">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:5px">Name</label>
+              <input type="text" id="nl-name" placeholder="Full name">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:5px">Service Interest</label>
+              <input type="text" id="nl-service" placeholder="e.g. Internet 10 Mbps, CCTV">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:5px">Location</label>
+              <input type="text" id="nl-location" placeholder="Area / estate">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:5px">Source</label>
+              <select id="nl-source">
+                <option value="website">Website</option>
+                <option value="referral">Referral</option>
+                <option value="social">Social Media</option>
+                <option value="walk-in">Walk-in</option>
+                <option value="call">Phone Call</option>
+              </select>
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:5px">Referred by (phone)</label>
+              <input type="text" id="nl-referredby" placeholder="Referrer's phone (optional)">
+            </div>
+            <div>
+              <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:5px">Notes</label>
+              <input type="text" id="nl-notes" placeholder="Any additional info">
+            </div>
+            <button class="btn btn-primary" onclick="submitLead()">Add Lead & Send WhatsApp</button>
+            <div id="lead-result" style="display:none;font-size:13px"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const API = '';  // same origin
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+function nav(id, el) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  el.classList.add('active');
+  if (id === 'dashboard') loadDashboard();
+  if (id === 'contacts')  loadContacts();
+  if (id === 'orders')    loadOrders();
+  if (id === 'tickets')   loadTickets();
+  if (id === 'catalog')   loadCatalog();
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.borderColor = isError ? 'var(--red)' : 'var(--green)';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+async function loadDashboard() {
+  try {
+    const d = await fetch(API + '/api/v1/stats').then(r => r.json());
+    document.getElementById('s-customers').textContent  = d.customers   || 0;
+    document.getElementById('s-consented').textContent  = d.consented   || 0;
+    document.getElementById('s-leads').textContent      = d.leads       || 0;
+    document.getElementById('s-orders').textContent     = d.openOrders  || 0;
+    document.getElementById('s-tickets').textContent    = d.openTickets || 0;
+
+    const total = d.bySource.reduce((s, r) => s + parseInt(r.count), 0) || 1;
+    document.getElementById('source-bars').innerHTML = d.bySource.map(r => `
+      <div class="source-bar">
+        <div class="label-row"><span>${r.source || 'unknown'}</span><span>${r.count}</span></div>
+        <div class="bar-bg"><div class="bar-fill" style="width:${Math.round(parseInt(r.count)/total*100)}%"></div></div>
+      </div>`).join('');
+
+    document.getElementById('recent-leads').innerHTML = (d.recentLeads || []).map(l => `
+      <tr>
+        <td>${l.phone}</td>
+        <td>${l.name || '—'}</td>
+        <td><span class="badge badge-blue">${l.source || '?'}</span></td>
+        <td>${l.type || '?'}</td>
+        <td style="color:var(--muted);font-size:12px">${timeAgo(l.created_at)}</td>
+      </tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:24px">No leads yet</td></tr>';
+  } catch(e) { toast('Failed to load stats: ' + e.message, true); }
+}
+
+// ── Contacts ──────────────────────────────────────────────────────────────────
+let contactOffset = 0;
+async function loadContacts(reset) {
+  if (reset) contactOffset = 0;
+  const q       = document.getElementById('contact-search').value;
+  const consent = document.getElementById('contact-consent').value;
+  const url     = API + '/api/v1/customers?limit=50&offset=' + contactOffset +
+    (q ? '&q=' + encodeURIComponent(q) : '') +
+    (consent ? '&consent=' + consent : '');
+  try {
+    const d = await fetch(url).then(r => r.json());
+    const consentBadge = s => s === 'given' ? 'badge-green' : s === 'denied' ? 'badge-red' : 'badge-yellow';
+    document.getElementById('contacts-body').innerHTML = d.customers.map(c => `
+      <tr>
+        <td>${c.phone}</td>
+        <td>${c.name || '—'}</td>
+        <td><span class="badge badge-blue">${c.source || '—'}</span></td>
+        <td>${c.service_tag || '—'}</td>
+        <td>${c.territory || '—'}</td>
+        <td><span class="badge ${consentBadge(c.consent_status)}">${c.consent_status}</span></td>
+        <td style="color:var(--muted);font-size:12px">${fmtDate(c.created_at)}</td>
+      </tr>`).join('') || '<tr><td colspan="7" style="color:var(--muted);text-align:center;padding:24px">No contacts</td></tr>';
+    document.getElementById('contact-pager').textContent =
+      'Showing ' + (contactOffset + 1) + '–' + Math.min(contactOffset + 50, d.total) + ' of ' + d.total;
+  } catch(e) { toast('Failed to load contacts', true); }
+}
+function contactPage(dir) {
+  contactOffset = Math.max(0, contactOffset + dir * 50);
+  loadContacts();
+}
+
+async function importContacts(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  toast('Importing ' + file.name + '...');
+  try {
+    const r = await fetch(API + '/contacts/import', { method: 'POST', body: fd }).then(r => r.json());
+    toast('Imported ' + r.imported + ' contacts, skipped ' + r.skipped, r.error);
+    loadContacts(true);
+  } catch(e) { toast('Import failed: ' + e.message, true); }
+  input.value = '';
+}
+
+// ── Orders ────────────────────────────────────────────────────────────────────
+async function loadOrders() {
+  const status = document.getElementById('order-status').value;
+  const url = API + '/api/v1/orders' + (status ? '?status=' + status : '');
+  try {
+    const d = await fetch(url).then(r => r.json());
+    const statusBadge = s => ({ pending:'badge-yellow', processing:'badge-blue', confirmed:'badge-green', fulfilled:'badge-green', cancelled:'badge-red' })[s] || 'badge-grey';
+    document.getElementById('orders-body').innerHTML = d.orders.map(o => `
+      <tr>
+        <td>#${o.id}</td>
+        <td>${o.phone}</td>
+        <td>${o.name || '—'}</td>
+        <td>${o.product}</td>
+        <td><span class="badge ${statusBadge(o.status)}">${o.status}</span></td>
+        <td style="color:var(--muted);font-size:12px">${fmtDate(o.created_at)}</td>
+      </tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted);text-align:center;padding:24px">No orders</td></tr>';
+  } catch(e) { toast('Failed to load orders', true); }
+}
+
+// ── Tickets ───────────────────────────────────────────────────────────────────
+async function loadTickets() {
+  const status = document.getElementById('ticket-status').value;
+  const url = API + '/api/v1/tickets' + (status ? '?status=' + status : '');
+  try {
+    const d = await fetch(url).then(r => r.json());
+    const pri = p => ({ high:'badge-red', medium:'badge-yellow', low:'badge-grey' })[p] || 'badge-grey';
+    document.getElementById('tickets-body').innerHTML = d.tickets.map(t => `
+      <tr>
+        <td>#${t.id}</td>
+        <td>${t.phone}</td>
+        <td>${t.name || '—'}</td>
+        <td>${t.issue.substring(0,60)}${t.issue.length>60?'…':''}</td>
+        <td><span class="badge ${pri(t.priority)}">${t.priority}</span></td>
+        <td><span class="badge badge-blue">${t.status}</span></td>
+        <td>${t.technician || '—'}</td>
+        <td style="color:var(--muted);font-size:12px">${fmtDate(t.created_at)}</td>
+      </tr>`).join('') || '<tr><td colspan="8" style="color:var(--muted);text-align:center;padding:24px">No open tickets</td></tr>';
+  } catch(e) { toast('Failed to load tickets', true); }
+}
+
+// ── Catalog ───────────────────────────────────────────────────────────────────
+let catalogData = [];
+async function loadCatalog() {
+  try {
+    const d = await fetch(API + '/api/v1/catalog').then(r => r.json());
+    catalogData = d.items || [];
+    renderCatalog('all');
+  } catch(e) { toast('Failed to load catalog', true); }
+}
+function filterCatalog(type, el) {
+  document.querySelectorAll('#catalog-filters .pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  renderCatalog(type);
+}
+function renderCatalog(type) {
+  const items = type === 'all' ? catalogData : catalogData.filter(i => i.type === type);
+  document.getElementById('catalog-body').innerHTML = items.map(i => `
+    <tr>
+      <td><strong>${i.name}</strong></td>
+      <td><span class="badge ${i.type==='internet'?'badge-blue':'badge-green'}">${i.type}</span></td>
+      <td>${parseFloat(i.price||0) > 0 ? 'KES ' + parseFloat(i.price).toLocaleString() : '—'}</td>
+      <td style="color:var(--muted)">${i.description || '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="4" style="color:var(--muted);text-align:center;padding:24px">No catalog items. Check Manager.io env vars.</td></tr>';
+}
+async function refreshCatalog() {
+  try {
+    const d = await fetch(API + '/api/v1/catalog/refresh', { method: 'POST' }).then(r => r.json());
+    toast('Catalog refreshed — ' + d.count + ' items');
+    loadCatalog();
+  } catch(e) { toast('Refresh failed', true); }
+}
+
+// ── Outreach ──────────────────────────────────────────────────────────────────
+async function loadPendingCount() {
+  const t = document.getElementById('blast-territory').value;
+  const c = document.getElementById('blast-cluster').value;
+  const url = API + '/api/v1/outreach/pending?limit=1' +
+    (t ? '&territory=' + encodeURIComponent(t) : '') +
+    (c ? '&cluster=' + encodeURIComponent(c) : '');
+  try {
+    const d = await fetch(url).then(r => r.json());
+    document.getElementById('pending-count').textContent = d.count;
+  } catch(e) { toast('Could not load count', true); }
+}
+async function runBlast() {
+  const btn = document.getElementById('blast-btn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const d = await fetch(API + '/api/v1/outreach/blast', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        territory: document.getElementById('blast-territory').value || undefined,
+        cluster:   document.getElementById('blast-cluster').value   || undefined,
+      }),
+    }).then(r => r.json());
+    const el = document.getElementById('blast-result');
+    el.style.display = 'block';
+    el.innerHTML = `<div style="padding:14px;background:rgba(34,197,94,.1);border-radius:8px;color:var(--green)">
+      ✅ Blast complete — Sent: <strong>${d.sent}</strong>, Failed: <strong>${d.failed}</strong>, Total: <strong>${d.total}</strong>
+    </div>`;
+  } catch(e) { toast('Blast failed: ' + e.message, true); }
+  btn.disabled = false; btn.textContent = '🚀 Send Blast';
+}
+
+// ── Add Lead ──────────────────────────────────────────────────────────────────
+async function submitLead() {
+  const phone = document.getElementById('nl-phone').value.trim();
+  if (!phone) { toast('Phone is required', true); return; }
+  const body = {
+    phone,
+    name:        document.getElementById('nl-name').value.trim()       || undefined,
+    service:     document.getElementById('nl-service').value.trim()    || undefined,
+    location:    document.getElementById('nl-location').value.trim()   || undefined,
+    source:      document.getElementById('nl-source').value,
+    referred_by: document.getElementById('nl-referredby').value.trim() || undefined,
+    notes:       document.getElementById('nl-notes').value.trim()      || undefined,
+  };
+  try {
+    const d = await fetch(API + '/leads/web', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json());
+    const el = document.getElementById('lead-result');
+    el.style.display = 'block';
+    if (d.success) {
+      el.innerHTML = `<div style="padding:12px;background:rgba(34,197,94,.1);border-radius:8px;color:var(--green)">✅ Lead saved. WhatsApp message sent to ${d.phone}.</div>`;
+      ['nl-phone','nl-name','nl-service','nl-location','nl-referredby','nl-notes'].forEach(id => document.getElementById(id).value = '');
+    } else {
+      el.innerHTML = `<div style="padding:12px;background:rgba(239,68,68,.1);border-radius:8px;color:var(--red)">❌ ${d.error}</div>`;
+    }
+  } catch(e) { toast('Failed: ' + e.message, true); }
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-KE', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+}
+function timeAgo(iso) {
+  if (!iso) return '—';
+  const s = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return Math.floor(s/86400) + 'd ago';
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadDashboard();
+</script>
+</body>
+</html>
