@@ -24,6 +24,11 @@ module.exports = {
   redis: {
     url: optional('REDIS_URL', 'redis://laitor_cache:6379'),
   },
+  manager: {
+    url:         optional('MANAGER_URL'),
+    apiKey:      optional('MANAGER_API_KEY'),
+    businessKey: optional('MANAGER_BUSINESS_KEY'),
+  },
   webhook: {
     secret: optional('WEBHOOK_SECRET', 'laitor_webhook_secret'),
   },

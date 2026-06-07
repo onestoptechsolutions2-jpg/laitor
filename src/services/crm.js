@@ -6,7 +6,7 @@ const logger = require('../utils/logger');
 
 /**
  * Twenty CRM GraphQL client.
- * Endpoint: POST {CRM_URL}/api
+ * Endpoint: POST {CRM_URL}/graphql
  */
 const gql = async (query, variables = {}) => {
   const res = await axios.post(
@@ -29,15 +29,10 @@ const gql = async (query, variables = {}) => {
   return res.data.data;
 };
 
-/**
- * Find or create a Person in Twenty CRM by phone number.
- * Returns the CRM person ID (string) or null on failure.
- */
 const upsertPerson = async ({ phone, name }) => {
   if (!config.crm.url || !config.crm.apiKey) return null;
 
   try {
-    // Search for existing person by phone
     const searchData = await gql(
       `query FindPerson($phone: StringFilter!) {
         people(filter: { phones: { primaryPhoneNumber: $phone } }) {
@@ -53,7 +48,6 @@ const upsertPerson = async ({ phone, name }) => {
       return existing.id;
     }
 
-    // Create new person
     const firstName = name ? name.split(' ')[0] : 'Unknown';
     const lastName  = name ? name.split(' ').slice(1).join(' ') : '';
 
@@ -78,10 +72,6 @@ const upsertPerson = async ({ phone, name }) => {
   }
 };
 
-/**
- * Create an Opportunity (lead) in Twenty CRM.
- * Returns the CRM opportunity ID or null.
- */
 const createLead = async ({ crmPersonId, type, notes }) => {
   if (!config.crm.url || !config.crm.apiKey || !crmPersonId) return null;
 
@@ -99,11 +89,7 @@ const createLead = async ({ crmPersonId, type, notes }) => {
           id
         }
       }`,
-      {
-        name: `[${type}] WhatsApp Lead`,
-        closeDate,
-        personId: crmPersonId,
-      }
+      { name: `[${type}] WhatsApp Lead`, closeDate, personId: crmPersonId }
     );
 
     const id = data?.createOpportunity?.id;
@@ -115,26 +101,21 @@ const createLead = async ({ crmPersonId, type, notes }) => {
   }
 };
 
-/**
- * Log a note against a CRM person (interaction history).
- */
 const logActivity = async ({ crmPersonId, message, direction }) => {
   if (!config.crm.url || !config.crm.apiKey || !crmPersonId) return;
 
   try {
     await gql(
-      `mutation CreateNote($title: String!, $body: String!, $personId: ID!) {
+      `mutation CreateNote($title: String!, $personId: ID!) {
         createNote(data: {
           title: $title
-          body: { markdown: $body }
           noteTargets: { createMany: { data: [{ personId: $personId }] } }
         }) {
           id
         }
       }`,
       {
-        title: `WhatsApp ${direction === 'in' ? 'Inbound' : 'Outbound'}`,
-        body: message,
+        title: `WhatsApp ${direction === 'in' ? 'Inbound' : 'Outbound'}: ${message.substring(0, 100)}`,
         personId: crmPersonId,
       }
     );

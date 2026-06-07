@@ -8,6 +8,7 @@ const crm = require('../services/crm');
 const orderService = require('../services/order');
 const ticketService = require('../services/ticket');
 const admin = require('../services/admin');
+const manager = require('../services/manager');
 const logger = require('../utils/logger');
 
 const STATES = {
@@ -189,6 +190,20 @@ const handleAdminCommand = async ({ cmd, phone }) => {
     if (status) {
       const order = await orderService.updateStatus(cmd.id, status);
       if (order) {
+        // Create invoice in Manager.io when order is confirmed
+        if (status === orderService.ORDER_STATUS.CONFIRMED) {
+          const customerKey = await manager.upsertCustomer({
+            phone: order.phone,
+            name: order.phone,
+          });
+          await manager.createInvoice({
+            customerKey,
+            orderId: order.id,
+            product: order.product,
+            phone: order.phone,
+          });
+        }
+
         await whatsapp.sendText(
           order.phone,
           'Update on your order #' + order.id + ':\nProduct: ' + order.product + '\nStatus: ' + status.toUpperCase() +
