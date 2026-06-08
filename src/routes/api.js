@@ -38,6 +38,7 @@ const agentSvc = require('../services/agents');
 const quoteSvc = require('../services/quote');
 const syncQ    = require('../services/sync-queue');
 const whatsapp = require('../services/whatsapp');
+const cfgStore = require('../services/config-store');
 const logger   = require('../utils/logger');
 
 const router = express.Router();
@@ -400,12 +401,9 @@ router.post('/sync-queue/retry/:id', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-module.exports = router;
 
-// ── Content & Flows ───────────────────────────────────────────────────────────
-// Bot messages and menu items — editable from admin dashboard without redeployment
-
-const cfgStore = require('../services/config-store');
+// ── Content & Flows — bot messages and menu items editable from admin dashboard ─
+// Routes placed here (before module.exports) so they are always registered.
 
 router.get('/content/messages', async (_req, res) => {
   try {
@@ -429,7 +427,6 @@ router.post('/content/messages/:key/reset', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-// Menu items
 router.get('/content/menu-items', async (_req, res) => {
   try {
     const r = await query(`SELECT * FROM menu_items ORDER BY display_order, id`);
@@ -444,7 +441,7 @@ router.post('/content/menu-items', async (req, res) => {
     const r = await query(
       `INSERT INTO menu_items (label, description, icon, action, display_order)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [label, description||null, icon||'📌', action, parseInt(display_order)||0]
+      [label, description || null, icon || '📌', action, parseInt(display_order) || 0]
     );
     return res.status(201).json({ success: true, item: r.rows[0] });
   } catch (err) { return res.status(500).json({ error: err.message }); }
@@ -456,8 +453,8 @@ router.put('/content/menu-items/:id', async (req, res) => {
     const r = await query(
       `UPDATE menu_items SET label=$1, description=$2, icon=$3, action=$4,
          display_order=$5, active=$6 WHERE id=$7 RETURNING *`,
-      [label, description||null, icon||'📌', action,
-       parseInt(display_order)||0, active!==undefined?active:true, req.params.id]
+      [label, description || null, icon || '📌', action,
+       parseInt(display_order) || 0, active !== undefined ? active : true, req.params.id]
     );
     return res.json({ success: true, item: r.rows[0] });
   } catch (err) { return res.status(500).json({ error: err.message }); }
@@ -469,3 +466,5 @@ router.delete('/content/menu-items/:id', async (req, res) => {
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
+
+module.exports = router;
