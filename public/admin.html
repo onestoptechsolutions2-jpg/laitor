@@ -526,6 +526,10 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
       Content & Flows
     </button>
+    <button class="nav-link" onclick="nav('diagnostics',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      Diagnostics
+    </button>
   </nav>
 
   <!-- ── Main ── -->
@@ -1030,6 +1034,27 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
               </div>
               <button class="btn btn-primary" onclick="saveMenuItem()">Save Menu Item</button>
             </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ════════ DIAGNOSTICS ════════ -->
+    <section id="diagnostics" class="section">
+      <div class="topbar">
+        <div class="topbar-left"><button class="hamburger" onclick="openSidebar()">☰</button><h1>System Diagnostics</h1></div>
+        <div class="topbar-actions">
+          <button class="btn btn-primary btn-sm" onclick="runDiagnostics()" id="diag-btn">▶ Run Tests</button>
+        </div>
+      </div>
+      <div class="content">
+        <div class="alert alert-info" style="margin-bottom:16px">
+          Tests each external connection live. Read-only — no data is written. Run this after changing environment variables or after a redeploy.
+        </div>
+        <div id="diag-results">
+          <div class="card-empty" style="padding:40px;text-align:center;color:var(--muted)">
+            <div style="font-size:32px;margin-bottom:8px">🔌</div>
+            Click <strong>Run Tests</strong> to check all connections
           </div>
         </div>
       </div>
@@ -1618,6 +1643,54 @@ async function deleteMenuItem(id) {
   if (!confirm('Delete this menu item?')) return;
   await fetch(API + '/api/v1/content/menu-items/' + id, { method: 'DELETE' });
   loadMenuItems(); toast('Deleted');
+}
+
+// ── Diagnostics ──────────────────────────────────────────────────────────────
+async function runDiagnostics() {
+  const btn = document.getElementById('diag-btn');
+  btn.disabled = true; btn.textContent = '⏳ Testing…';
+  document.getElementById('diag-results').innerHTML = '<div style="padding:20px;color:var(--muted);font-size:13px">Running connection tests…</div>';
+  try {
+    const d = await fetch(API + '/api/v1/diagnostics').then(r => r.json());
+    const order = ['database','redis','whatsapp','crm','manager'];
+    const labels = { database:'PostgreSQL DB', redis:'Redis Cache', whatsapp:'Evolution API (WhatsApp)', crm:'Twenty CRM', manager:'Manager.io' };
+    const icons  = { database:'🗄', redis:'⚡', whatsapp:'📱', crm:'👥', manager:'💰' };
+    document.getElementById('diag-results').innerHTML = `
+      <div style="margin-bottom:12px;font-size:13px;color:var(--muted)">
+        Overall: <strong style="color:${d.status==='all_ok'?'var(--green)':'var(--yellow)'}">
+          ${d.status==='all_ok'?'✅ All connections OK':'⚠️ Some issues found'}
+        </strong>
+      </div>
+    ` + order.map(key => {
+      const r = d.results[key] || {};
+      const ok = r.ok;
+      const cfg = r.configured !== false;
+      return `
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-header" style="gap:12px">
+            <div style="font-size:18px">${icons[key]}</div>
+            <div style="flex:1">
+              <div style="font-weight:600;font-size:14px">${labels[key]}</div>
+              ${r.url ? `<div style="font-size:11px;color:var(--muted)">${r.url}</div>` : ''}
+            </div>
+            <span class="badge badge-${ok?'green':cfg?'red':'grey'}">${ok?'Connected':cfg?'Error':'Not configured'}</span>
+            ${r.ms !== undefined ? `<span style="font-size:11px;color:var(--muted)">${r.ms}ms</span>` : ''}
+          </div>
+          ${r.error || r.errors || r.businesses || r.instances || r.note ? `
+          <div class="card-body" style="font-size:12px">
+            ${r.error   ? `<div style="color:var(--red)">❌ ${escHtml(r.error)}</div>` : ''}
+            ${r.httpStatus ? `<div style="color:var(--muted)">HTTP ${r.httpStatus}</div>` : ''}
+            ${r.errors?.length ? `<div style="color:var(--red)">GraphQL: ${r.errors.map(e=>e.message).join(', ')}</div>` : ''}
+            ${r.businesses?.length ? `<div style="color:var(--green)">Businesses: ${r.businesses.join(', ')}</div>` : ''}
+            ${r.instances?.length  ? `<div>Instances: ${r.instances.map(i=>i.name+'('+i.status+')').join(', ')}</div>` : ''}
+            ${r.note ? `<div style="color:var(--muted)">${r.note}</div>` : ''}
+            ${r.version ? `<div style="color:var(--green)">Version: ${JSON.stringify(r.version).substring(0,80)}</div>` : ''}
+          </div>` : ''}
+        </div>
+      `;
+    }).join('');
+  } catch(e) { document.getElementById('diag-results').innerHTML = `<div class="alert alert-error">Failed to reach server: ${e.message}</div>`; }
+  btn.disabled = false; btn.textContent = '▶ Run Tests';
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

@@ -470,3 +470,102 @@ router.delete('/content/menu-items/:id', async (req, res) => {
 });
 
 module.exports = router;
+
+// ── Connection diagnostics ────────────────────────────────────────────────────
+// GET /api/v1/diagnostics — test all external service connections live.
+// Safe: read-only calls only (no data written).
+
+router.get('/diagnostics', async (_req, res) => {
+  const results = {};
+  const t = () => Date.now();
+
+  // ── Database ──
+  const dbStart = t();
+  try {
+    await query('SELECT 1');
+    results.database = { ok: true, ms: t() - dbStart };
+  } catch (e) {
+    results.database = { ok: false, error: e.message, ms: t() - dbStart };
+  }
+
+  // ── Redis / Session ──
+  const redisStart = t();
+  try {
+    const session = require('../services/session');
+    await session.get('__diag_test__');
+    results.redis = { ok: true, ms: t() - redisStart };
+  } catch (e) {
+    results.redis = { ok: false, error: e.message, ms: t() - redisStart };
+  }
+
+  // ── Twenty CRM ──
+  const config = require('../config');
+  const crmStart = t();
+  if (!config.crm.url || !config.crm.apiKey) {
+    results.crm = { ok: false, error: 'CRM_URL or CRM_API_KEY not set', configured: false };
+  } else {
+    try {
+      const axios = require('axios');
+      const r = await axios.post(
+        `${config.crm.url}/graphql`,
+        { query: '{ __typename }' },
+        { headers: { Authorization: `Bearer ${config.crm.apiKey}`, 'Content-Type': 'application/json' }, timeout: 8000 }
+      );
+      const ok = !r.data?.errors?.length;
+      results.crm = { ok, configured: true, url: config.crm.url, ms: t() - crmStart, graphqlTypename: r.data?.data?.__typename || null, errors: r.data?.errors || undefined };
+    } catch (e) {
+      results.crm = { ok: false, configured: true, url: config.crm.url, error: e.message, httpStatus: e.response?.status, ms: t() - crmStart };
+    }
+  }
+
+  // ── Manager.io ──
+  const mgrStart = t();
+  if (!config.manager.url || !config.manager.apiKey) {
+    results.manager = { ok: false, error: 'MANAGER_URL or MANAGER_API_KEY not set', configured: false };
+  } else {
+    try {
+      const axios = require('axios');
+      const r = await axios.get(`${config.manager.url}/businesses`, {
+        headers: { Authorization: `Bearer ${config.manager.apiKey}`, 'Content-Type': 'application/json' },
+        timeout: 8000,
+        maxRedirects: 0,
+      });
+      const businesses = Array.isArray(r.data) ? r.data.map(b => b.Name || b.name) : [];
+      results.manager = { ok: true, configured: true, url: config.manager.url, ms: t() - mgrStart, businesses };
+    } catch (e) {
+      // Try /about or root as fallback
+      try {
+        const axios = require('axios');
+        const r2 = await axios.get(`${config.manager.url}/about`, {
+          headers: { Authorization: `Bearer ${config.manager.apiKey}` },
+          timeout: 5000,
+          maxRedirects: 0,
+        });
+        results.manager = { ok: true, configured: true, url: config.manager.url, ms: t() - mgrStart, note: '/businesses failed, /about succeeded', version: r2.data?.Version || r2.data };
+      } catch (e2) {
+        results.manager = { ok: false, configured: true, url: config.manager.url, error: e.message, httpStatus: e.response?.status, ms: t() - mgrStart };
+      }
+    }
+  }
+
+  // ── Evolution API (WhatsApp) ──
+  const waStart = t();
+  if (!config.evolution.url || !config.evolution.apiKey) {
+    results.whatsapp = { ok: false, error: 'EVOLUTION_API_URL or EVOLUTION_API_KEY not set', configured: false };
+  } else {
+    try {
+      const axios = require('axios');
+      const r = await axios.get(`${config.evolution.url}/instance/fetchInstances`, {
+        headers: { apikey: config.evolution.apiKey },
+        timeout: 8000,
+      });
+      const instances = Array.isArray(r.data) ? r.data.map(i => ({ name: i.instance?.instanceName, status: i.instance?.status })) : [];
+      results.whatsapp = { ok: true, configured: true, url: config.evolution.url, instance: config.evolution.instance, ms: t() - waStart, instances };
+    } catch (e) {
+      results.whatsapp = { ok: false, configured: true, url: config.evolution.url, error: e.message, httpStatus: e.response?.status, ms: t() - waStart };
+    }
+  }
+
+  const allOk = Object.values(results).every(r => r.ok);
+  res.status(allOk ? 200 : 207).json({ status: allOk ? 'all_ok' : 'partial', results });
+});
