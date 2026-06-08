@@ -532,7 +532,8 @@ router.get('/diagnostics', async (_req, res) => {
     try {
       const axios = require('axios');
       // X-API-KEY header; business resolved server-side from key — no business key in URL
-      const r = await axios.get(`${config.manager.url}/customer-form`, {
+      // GET /customers = read-only list endpoint; /customer-form is POST-only (create)
+      const r = await axios.get(`${config.manager.url}/customers`, {
         headers: { 'X-API-KEY': config.manager.apiKey, 'Content-Type': 'application/json' },
         timeout: 8000,
         maxRedirects: 0,

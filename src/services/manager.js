@@ -12,12 +12,14 @@
  *
  * Required env vars:
  *   MANAGER_URL     -- full HTTPS API2 endpoint, e.g. https://finance360.laitor.co.ke/api2
- *   MANAGER_API_KEY -- API key from Manager.io Settings -> API
- *                      Sent as X-API-KEY header. The business is resolved from the key;
- *                      no business key is needed in the URL path.
+ *   MANAGER_API_KEY -- Access Token from Manager.io Settings -> Access Tokens
+ *                      Sent as X-API-KEY header. Business is resolved from the token.
  *
- * Endpoint naming: Manager.io Server API v2 uses kebab-case + "-form" suffix:
- *   /customer-form, /sales-invoice-form, /sales-quote-form, /inventory-item-form
+ * Endpoint pattern:
+ *   READ (list):  GET  /{entity}       e.g. /customers, /inventory-items
+ *   READ (one):   GET  /{entity}-form/{guid}
+ *   CREATE:       POST /{entity}-form
+ *   UPDATE:       PUT  /{entity}-form/{guid}
  *
  * All functions are non-fatal: failures are logged and null/[] returned
  * so the WhatsApp flow is never blocked by a finance API error.
@@ -38,7 +40,7 @@ const isConfigured = () =>
 
 /**
  * Creates a pre-configured axios instance for Manager.io API v2.
- * Uses X-API-KEY header. Business is determined server-side from the key.
+ * Uses X-API-KEY header. Business is determined server-side from the token.
  * @returns {import('axios').AxiosInstance}
  */
 const client = () =>
@@ -67,7 +69,8 @@ const upsertCustomer = async ({ phone, name }) => {
   if (!isConfigured()) return null;
 
   try {
-    const res       = await client().get('/customer-form');
+    // GET /customers = read-only list endpoint (no -form suffix)
+    const res       = await client().get('/customers');
     const customers = Array.isArray(res.data) ? res.data : [];
 
     const existing = customers.find(
@@ -81,6 +84,7 @@ const upsertCustomer = async ({ phone, name }) => {
       return existing.key;
     }
 
+    // POST /customer-form = create via form endpoint
     const createRes = await client().post('/customer-form', {
       Name:         name || phone,
       CustomFields: [{ CustomField: 'Phone', Value: phone }],
@@ -235,7 +239,8 @@ const getInventoryItems = async () => {
   if (!isConfigured()) return [];
 
   try {
-    const res  = await client().get('/inventory-item-form');
+    // GET /inventory-items = read-only list endpoint (no -form suffix)
+    const res  = await client().get('/inventory-items');
     const data = Array.isArray(res.data) ? res.data : [];
     logger.info('Manager: inventory fetched', { count: data.length });
     return data;
