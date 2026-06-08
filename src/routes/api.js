@@ -469,8 +469,6 @@ router.delete('/content/menu-items/:id', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-module.exports = router;
-
 // ── Connection diagnostics ────────────────────────────────────────────────────
 // GET /api/v1/diagnostics — test all external service connections live.
 // Safe: read-only calls only (no data written).
@@ -569,3 +567,5 @@ router.get('/diagnostics', async (_req, res) => {
   const allOk = Object.values(results).every(r => r.ok);
   res.status(allOk ? 200 : 207).json({ status: allOk ? 'all_ok' : 'partial', results });
 });
+
+module.exports = router;
