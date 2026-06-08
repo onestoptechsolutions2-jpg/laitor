@@ -166,9 +166,11 @@ router.get('/catalog', async (_req, res) => {
 
 router.post('/catalog/refresh', async (_req, res) => {
   try {
-    await query(`DELETE FROM catalog_cache`);
+    // Only delete Manager.io-sourced items (raw IS NOT NULL).
+    // Manual items added via admin (raw IS NULL) are preserved.
+    await query(`DELETE FROM catalog_cache WHERE raw IS NOT NULL`);
     const items = await catalog.getCatalog();
-    return res.json({ refreshed: true, count: items.length });
+    return res.json({ success: true, count: items.length });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 

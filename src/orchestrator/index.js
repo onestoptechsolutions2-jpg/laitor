@@ -262,24 +262,31 @@ const handleAdminCommand = async ({ cmd, phone }) => {
 /** Main menu — routes to internet, products, support, or agent handoff */
 const handleMainMenu = async ({ text }) => {
   const choice = text.trim().replace(/[^0-9]/g, '');
-  if (choice === '1') {
+  if (!choice) return { nextState: STATES.MAIN_MENU, replies: await menu.buildMainMenu() };
+
+  // Use action from DB so admin reordering menu items doesn't break routing
+  const action = await menu.getMenuAction(choice);
+
+  if (action === 'INTERNET_BROWSE') {
     const cat      = await catalog.getCatalog();
     const internet = catalog.splitByType(cat).internet;
     return { nextState: STATES.INTERNET_BROWSE, replies: menu.buildInternetMenu(internet), sessionData: { catalogInternet: internet } };
   }
-  if (choice === '2') {
+  if (action === 'PRODUCT_BROWSE') {
     const cat      = await catalog.getCatalog();
     const products = catalog.splitByType(cat).products;
     return { nextState: STATES.PRODUCT_BROWSE, replies: menu.buildProductMenu(products), sessionData: { catalogProducts: products } };
   }
-  if (choice === '3') return { nextState: STATES.SUPPORT_AWAIT, replies: await menu.buildSupportPrompt() };
-  if (choice === '4') return { nextState: STATES.AGENT_HANDOFF, replies: await menu.buildAgentHandoff() };
+  if (action === 'SUPPORT_AWAIT')  return { nextState: STATES.SUPPORT_AWAIT, replies: await menu.buildSupportPrompt() };
+  if (action === 'AGENT_HANDOFF')  return { nextState: STATES.AGENT_HANDOFF, replies: await menu.buildAgentHandoff() };
+
+  // Unknown action or out-of-range choice — redisplay menu
   return { nextState: STATES.MAIN_MENU, replies: await menu.buildMainMenu() };
 };
 
 const handleInternetBrowse = async ({ text, sess }) => {
   const choice = parseInt(text.trim(), 10);
-  if (choice === 0 || /^menu$/i.test(text.trim())) return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+  if (choice === 0 || /^menu$/i.test(text.trim())) return { nextState: STATES.MAIN_MENU, replies: await menu.buildMainMenu() };
   let items = sess.catalogInternet;
   if (!items) { const cat = await catalog.getCatalog(); items = catalog.splitByType(cat).internet; }
   const selected = catalog.getByIndex(items, choice);
@@ -289,7 +296,7 @@ const handleInternetBrowse = async ({ text, sess }) => {
 
 const handleProductBrowse = async ({ text, sess }) => {
   const choice = parseInt(text.trim(), 10);
-  if (choice === 0 || /^menu$/i.test(text.trim())) return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+  if (choice === 0 || /^menu$/i.test(text.trim())) return { nextState: STATES.MAIN_MENU, replies: await menu.buildMainMenu() };
   let items = sess.catalogProducts;
   if (!items) { const cat = await catalog.getCatalog(); items = catalog.splitByType(cat).products; }
   const selected = catalog.getByIndex(items, choice);
@@ -307,7 +314,7 @@ const handleConfirm = async ({ text, customer, phone, name, sess, orderType }) =
 
   if (choice === '1') {
     const item = sess.pendingItem;
-    if (!item) return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+    if (!item) return { nextState: STATES.MAIN_MENU, replies: await menu.buildMainMenu() };
 
     let order = null;
     if (customer.id) order = await orderService.create({ customerId: customer.id, product: item.name, notes: item.name });
@@ -317,10 +324,11 @@ const handleConfirm = async ({ text, customer, phone, name, sess, orderType }) =
     // Notify category agent
     await agentSvc.notifyNewOrder({ phone, name, product: item.name, orderId: order?.id || '?', notes: `KES ${item.price || 'TBD'}` });
 
+    const confirmText = await menu.buildOrderConfirmed({ product: item.name, orderId: String(order?.id || 'WA-' + Date.now()) });
     return {
       nextState: STATES.MAIN_MENU,
       replies: [
-        { type: 'text', text: `✅ Order confirmed for: *${item.name}*\n\nOur team will reach out to arrange delivery or installation.\n\nRef: *#${order?.id || 'WA-' + Date.now()}*` },
+        { type: 'text', text: confirmText },
         ...(await menu.buildMainMenu()),
       ],
     };
@@ -334,10 +342,11 @@ const handleSupportAwait = async ({ text, customer, phone, name }) => {
   if (customer.id) ticket = await ticketService.create({ customerId: customer.id, issue: text });
   await syncToCRM({ phone, name, type: 'SUPPORT_REQUEST', notes: text });
   await agentSvc.notifyNewTicket({ phone, name, issue: text, ticketId: ticket?.id || '?', priority: ticket?.priority || 'medium' });
+  const ticketText = await menu.buildTicketLogged({ ticketId: String(ticket?.id || '?') });
   return {
     nextState: STATES.MAIN_MENU,
     replies: [
-      { type: 'text', text: `✅ Support ticket *#${ticket?.id || '?'}* logged.\n\nOur technical team will reach out shortly.` },
+      { type: 'text', text: ticketText },
       ...(await menu.buildMainMenu()),
     ],
   };
@@ -470,6 +479,12 @@ const process = async (msg) => {
         [phone, name || null]
       );
       customer = res.rows[0];
+      // First contact ever — send welcome message before anything else
+      if (!sess.welcomed) {
+        const cfgStore = require('../services/config-store');
+        const welcome  = await cfgStore.get('welcome_message').catch(() => null);
+        if (welcome) await whatsapp.sendText(phone, welcome).catch(() => {});
+      }
     }
   } catch (err) {
     logger.error('Customer upsert failed', { phone, error: err.message });
@@ -575,6 +590,7 @@ const process = async (msg) => {
     state:       result.nextState,
     lastMessage: text,
     customerId:  customer.id,
+    welcomed:    true,
     kycDone:     result.nextState !== STATES.KYC_NAME && result.nextState !== STATES.KYC_LOCATION
                  ? (sess.kycDone || result.nextState === STATES.MAIN_MENU)
                  : false,
