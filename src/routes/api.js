@@ -518,31 +518,31 @@ router.get('/diagnostics', async (_req, res) => {
 
   // ── Manager.io ──
   const mgrStart = t();
-  if (!config.manager.url || !config.manager.apiKey) {
-    results.manager = { ok: false, error: 'MANAGER_URL or MANAGER_API_KEY not set', configured: false };
+  if (!config.manager.url || !config.manager.apiKey || !config.manager.businessKey) {
+    results.manager = {
+      ok: false,
+      error: 'MANAGER_URL, MANAGER_API_KEY, or MANAGER_BUSINESS_KEY not set',
+      configured: false,
+      missing: [
+        !config.manager.url         && 'MANAGER_URL',
+        !config.manager.apiKey      && 'MANAGER_API_KEY',
+        !config.manager.businessKey && 'MANAGER_BUSINESS_KEY',
+      ].filter(Boolean),
+    };
   } else {
     try {
       const axios = require('axios');
-      const r = await axios.get(`${config.manager.url}/businesses`, {
-        headers: { Authorization: `Bearer ${config.manager.apiKey}`, 'Content-Type': 'application/json' },
+      // X-API-KEY header (not Authorization: Bearer); business-scoped endpoint
+      const endpoint = `${config.manager.url}/${encodeURIComponent(config.manager.businessKey)}/customers`;
+      const r = await axios.get(endpoint, {
+        headers: { 'X-API-KEY': config.manager.apiKey, 'Content-Type': 'application/json' },
         timeout: 8000,
         maxRedirects: 0,
       });
-      const businesses = Array.isArray(r.data) ? r.data.map(b => b.Name || b.name) : [];
-      results.manager = { ok: true, configured: true, url: config.manager.url, ms: t() - mgrStart, businesses };
+      const customerCount = Array.isArray(r.data) ? r.data.length : '?';
+      results.manager = { ok: true, configured: true, url: config.manager.url, ms: t() - mgrStart, customerCount };
     } catch (e) {
-      // Try /about or root as fallback
-      try {
-        const axios = require('axios');
-        const r2 = await axios.get(`${config.manager.url}/about`, {
-          headers: { Authorization: `Bearer ${config.manager.apiKey}` },
-          timeout: 5000,
-          maxRedirects: 0,
-        });
-        results.manager = { ok: true, configured: true, url: config.manager.url, ms: t() - mgrStart, note: '/businesses failed, /about succeeded', version: r2.data?.Version || r2.data };
-      } catch (e2) {
-        results.manager = { ok: false, configured: true, url: config.manager.url, error: e.message, httpStatus: e.response?.status, ms: t() - mgrStart };
-      }
+      results.manager = { ok: false, configured: true, url: config.manager.url, error: e.message, httpStatus: e.response?.status, ms: t() - mgrStart };
     }
   }
 

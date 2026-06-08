@@ -11,11 +11,13 @@
  *   - Sales Invoices (auto-created after customer approves a quote)
  *
  * Required env vars:
- *   MANAGER_URL      — full HTTPS API2 endpoint, e.g. https://finance360.laitor.co.ke/api2
- *                      MUST be HTTPS — HTTP redirects to HTTPS and the redirect strips the
- *                      Authorization header, causing 401 errors.
- *   MANAGER_API_KEY  — access token from Manager.io → Settings → API
- *                      The token is sent as: Authorization: Bearer <token>
+ *   MANAGER_URL          -- full HTTPS API2 endpoint, e.g. https://finance360.laitor.co.ke/api2
+ *   MANAGER_API_KEY      -- API key from Manager.io Settings -> API
+ *                           Sent as X-API-KEY header (NOT Authorization: Bearer).
+ *                           Use the standard Base64 key exactly as shown in Manager.io.
+ *   MANAGER_BUSINESS_KEY -- UUID of the Manager.io business.
+ *                           Find it in the URL when logged in:
+ *                           https://finance360.laitor.co.ke/#/{BUSINESS_UUID}/Dashboard
  *
  * All functions are non-fatal: failures are logged and null/[] returned
  * so the WhatsApp flow is never blocked by a finance API error.
@@ -25,33 +27,33 @@ const axios  = require('axios');
 const config = require('../config');
 const logger = require('../utils/logger');
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ---- Helpers -----------------------------------------------------------------
 
 /**
- * Returns true only if both MANAGER_URL and MANAGER_API_KEY are configured.
+ * Returns true only if MANAGER_URL, MANAGER_API_KEY, and MANAGER_BUSINESS_KEY are all set.
  * @returns {boolean}
  */
-const isConfigured = () => !!(config.manager.url && config.manager.apiKey);
+const isConfigured = () =>
+  !!(config.manager.url && config.manager.apiKey && config.manager.businessKey);
 
 /**
  * Creates a pre-configured axios instance for Manager.io API v2.
- * Sends Authorization: Bearer <token> as required by Manager.io Server.
+ * Uses X-API-KEY header as required by Manager.io Server OpenAPI spec.
+ * Base URL includes the business key: {MANAGER_URL}/{MANAGER_BUSINESS_KEY}
  * @returns {import('axios').AxiosInstance}
  */
 const client = () =>
   axios.create({
-    baseURL: config.manager.url,
+    baseURL: config.manager.url + '/' + config.manager.businessKey,
     headers: {
-      Authorization: `Bearer ${config.manager.apiKey}`,
-      'Content-Type': 'application/json',
+      'X-API-KEY':     config.manager.apiKey,
+      'Content-Type':  'application/json',
     },
-    timeout: 15000,
-    // Do NOT follow redirects — HTTP→HTTPS redirect strips auth header.
-    // MANAGER_URL must already be HTTPS.
+    timeout:      15000,
     maxRedirects: 0,
   });
 
-// ── Customers ─────────────────────────────────────────────────────────────────
+// ---- Customers ---------------------------------------------------------------
 
 /**
  * Find or create a Customer record in Manager.io by phone number.
@@ -94,15 +96,13 @@ const upsertCustomer = async ({ phone, name }) => {
   }
 };
 
-// ── Quotes ────────────────────────────────────────────────────────────────────
+// ---- Quotes ------------------------------------------------------------------
 
 /**
  * Create a Sales Quote in Manager.io for a pending order.
- * The quote is sent to the customer for approval via WhatsApp.
- * On approval, call convertQuoteToInvoice().
  *
  * @param {object} params
- * @param {string}        params.customerKey  - Manager.io customer key from upsertCustomer()
+ * @param {string}        params.customerKey  - Manager.io customer key
  * @param {number}        params.quoteId      - Local DB quotes.id
  * @param {Array<object>} params.items        - [{name, qty, price}]
  * @param {string}        [params.notes]      - Optional quote notes
@@ -110,13 +110,13 @@ const upsertCustomer = async ({ phone, name }) => {
  */
 const createQuote = async ({ customerKey, quoteId, items, notes }) => {
   if (!isConfigured()) {
-    logger.warn('Manager: not configured — skipping quote creation');
-    return `WA-QUOTE-${quoteId}`;  // local reference as fallback
+    logger.warn('Manager: not configured -- skipping quote creation');
+    return 'WA-QUOTE-' + quoteId;
   }
 
   try {
     const today     = new Date().toISOString().split('T')[0];
-    const reference = `WA-QUOTE-${quoteId}`;
+    const reference = 'WA-QUOTE-' + quoteId;
 
     const body = {
       Date:      today,
@@ -137,14 +137,12 @@ const createQuote = async ({ customerKey, quoteId, items, notes }) => {
     return quoteRef;
   } catch (err) {
     logger.warn('Manager: createQuote failed (non-fatal)', { quoteId, error: err.message });
-    return `WA-QUOTE-${quoteId}`;
+    return 'WA-QUOTE-' + quoteId;
   }
 };
 
 /**
  * Convert an approved quote into a Sales Invoice in Manager.io.
- * Called automatically when the customer taps "Approve" on a quote WhatsApp message.
- * Also advances the related opportunity in Twenty CRM to WON.
  *
  * @param {object} params
  * @param {string} params.managerQuoteRef  - The reference returned by createQuote()
@@ -155,21 +153,19 @@ const createQuote = async ({ customerKey, quoteId, items, notes }) => {
  */
 const convertQuoteToInvoice = async ({ managerQuoteRef, quoteId, customerKey, items }) => {
   if (!isConfigured()) {
-    logger.warn('Manager: not configured — skipping invoice creation');
-    return `WA-INV-${quoteId}`;
+    logger.warn('Manager: not configured -- skipping invoice creation');
+    return 'WA-INV-' + quoteId;
   }
 
   try {
-    const today   = new Date().toISOString().split('T')[0];
-    const invRef  = `WA-INV-${quoteId}`;
+    const today  = new Date().toISOString().split('T')[0];
+    const invRef = 'WA-INV-' + quoteId;
 
-    // Manager.io doesn't have a quote-to-invoice conversion endpoint in all versions.
-    // We create a new invoice referencing the quote.
     const body = {
-      Date:      today,
-      Reference: invRef,
+      Date:        today,
+      Reference:   invRef,
       ...(customerKey ? { Customer: customerKey } : {}),
-      Description: `Converted from quote ${managerQuoteRef}`,
+      Description: 'Converted from quote ' + managerQuoteRef,
       Lines: (items || []).map((item) => ({
         Description: item.name || item.description || 'Service',
         Qty:         item.qty   || 1,
@@ -184,11 +180,11 @@ const convertQuoteToInvoice = async ({ managerQuoteRef, quoteId, customerKey, it
     return invoiceKey;
   } catch (err) {
     logger.warn('Manager: convertQuoteToInvoice failed (non-fatal)', { quoteId, error: err.message });
-    return `WA-INV-${quoteId}`;
+    return 'WA-INV-' + quoteId;
   }
 };
 
-// ── Direct invoice (legacy / admin-confirmed orders) ─────────────────────────
+// ---- Direct invoice (admin-confirmed orders) ---------------------------------
 
 /**
  * Create a Sales Invoice directly (used when an admin confirms an order without a quote flow).
@@ -202,13 +198,13 @@ const convertQuoteToInvoice = async ({ managerQuoteRef, quoteId, customerKey, it
  */
 const createInvoice = async ({ customerKey, orderId, product, phone }) => {
   if (!isConfigured()) {
-    logger.warn('Manager: not configured — skipping invoice');
+    logger.warn('Manager: not configured -- skipping invoice');
     return null;
   }
 
   try {
     const today     = new Date().toISOString().split('T')[0];
-    const reference = `WA-ORDER-${orderId}`;
+    const reference = 'WA-ORDER-' + orderId;
 
     const body = {
       Date:      today,
@@ -228,24 +224,25 @@ const createInvoice = async ({ customerKey, orderId, product, phone }) => {
   }
 };
 
-// ── Inventory / Catalog ───────────────────────────────────────────────────────
+// ---- Inventory / Catalog -----------------------------------------------------
 
 /**
  * Fetch inventory items from Manager.io for use in the WhatsApp catalog menu.
  * Tries /inventory-items first, falls back to /items.
- * Returns an empty array (never throws) — catalog falls back to manual DB entries.
+ * Returns an empty array (never throws).
  *
- * @returns {Promise<Array>} Array of Manager.io inventory item objects
+ * @returns {Promise<Array>}
  */
 const getInventoryItems = async () => {
   if (!isConfigured()) return [];
 
-  for (const path of ['/inventory-items', '/items']) {
+  for (var i = 0; i < 2; i++) {
+    var path = i === 0 ? '/inventory-items' : '/items';
     try {
       const res  = await client().get(path);
       const data = Array.isArray(res.data) ? res.data : [];
       if (data.length > 0) {
-        logger.info('Manager: inventory fetched', { count: data.length, path });
+        logger.info('Manager: inventory fetched', { count: data.length, path: path });
         return data;
       }
     } catch (_) { /* try next path */ }
