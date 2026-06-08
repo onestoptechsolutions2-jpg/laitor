@@ -11,13 +11,13 @@
  *   - Sales Invoices (auto-created after customer approves a quote)
  *
  * Required env vars:
- *   MANAGER_URL          -- full HTTPS API2 endpoint, e.g. https://finance360.laitor.co.ke/api2
- *   MANAGER_API_KEY      -- API key from Manager.io Settings -> API
- *                           Sent as X-API-KEY header (NOT Authorization: Bearer).
- *                           Use the standard Base64 key exactly as shown in Manager.io.
- *   MANAGER_BUSINESS_KEY -- UUID of the Manager.io business.
- *                           Find it in the URL when logged in:
- *                           https://finance360.laitor.co.ke/#/{BUSINESS_UUID}/Dashboard
+ *   MANAGER_URL     -- full HTTPS API2 endpoint, e.g. https://finance360.laitor.co.ke/api2
+ *   MANAGER_API_KEY -- API key from Manager.io Settings -> API
+ *                      Sent as X-API-KEY header. The business is resolved from the key;
+ *                      no business key is needed in the URL path.
+ *
+ * Endpoint naming: Manager.io Server API v2 uses kebab-case + "-form" suffix:
+ *   /customer-form, /sales-invoice-form, /sales-quote-form, /inventory-item-form
  *
  * All functions are non-fatal: failures are logged and null/[] returned
  * so the WhatsApp flow is never blocked by a finance API error.
@@ -30,24 +30,23 @@ const logger = require('../utils/logger');
 // ---- Helpers -----------------------------------------------------------------
 
 /**
- * Returns true only if MANAGER_URL, MANAGER_API_KEY, and MANAGER_BUSINESS_KEY are all set.
+ * Returns true only if MANAGER_URL and MANAGER_API_KEY are both set.
  * @returns {boolean}
  */
 const isConfigured = () =>
-  !!(config.manager.url && config.manager.apiKey && config.manager.businessKey);
+  !!(config.manager.url && config.manager.apiKey);
 
 /**
  * Creates a pre-configured axios instance for Manager.io API v2.
- * Uses X-API-KEY header as required by Manager.io Server OpenAPI spec.
- * Base URL includes the business key: {MANAGER_URL}/{MANAGER_BUSINESS_KEY}
+ * Uses X-API-KEY header. Business is determined server-side from the key.
  * @returns {import('axios').AxiosInstance}
  */
 const client = () =>
   axios.create({
-    baseURL: config.manager.url + '/' + config.manager.businessKey,
+    baseURL: config.manager.url,
     headers: {
-      'X-API-KEY':     config.manager.apiKey,
-      'Content-Type':  'application/json',
+      'X-API-KEY':    config.manager.apiKey,
+      'Content-Type': 'application/json',
     },
     timeout:      15000,
     maxRedirects: 0,
@@ -68,7 +67,7 @@ const upsertCustomer = async ({ phone, name }) => {
   if (!isConfigured()) return null;
 
   try {
-    const res       = await client().get('/customers');
+    const res       = await client().get('/customer-form');
     const customers = Array.isArray(res.data) ? res.data : [];
 
     const existing = customers.find(
@@ -82,7 +81,7 @@ const upsertCustomer = async ({ phone, name }) => {
       return existing.key;
     }
 
-    const createRes = await client().post('/customers', {
+    const createRes = await client().post('/customer-form', {
       Name:         name || phone,
       CustomFields: [{ CustomField: 'Phone', Value: phone }],
     });
@@ -130,7 +129,7 @@ const createQuote = async ({ customerKey, quoteId, items, notes }) => {
       })),
     };
 
-    const res      = await client().post('/sales-quotes', body);
+    const res      = await client().post('/sales-quote-form', body);
     const quoteRef = res.data?.key || reference;
 
     logger.info('Manager: quote created', { quoteRef, reference, quoteId });
@@ -173,7 +172,7 @@ const convertQuoteToInvoice = async ({ managerQuoteRef, quoteId, customerKey, it
       })),
     };
 
-    const res        = await client().post('/sales-invoices', body);
+    const res        = await client().post('/sales-invoice-form', body);
     const invoiceKey = res.data?.key || invRef;
 
     logger.info('Manager: invoice created from quote', { invoiceKey, managerQuoteRef, quoteId });
@@ -213,7 +212,7 @@ const createInvoice = async ({ customerKey, orderId, product, phone }) => {
       Lines: [{ Description: product, Qty: 1, UnitPrice: 0 }],
     };
 
-    const res        = await client().post('/sales-invoices', body);
+    const res        = await client().post('/sales-invoice-form', body);
     const invoiceKey = res.data?.key;
 
     logger.info('Manager: invoice created', { invoiceKey, reference, orderId, product, phone });
@@ -228,7 +227,6 @@ const createInvoice = async ({ customerKey, orderId, product, phone }) => {
 
 /**
  * Fetch inventory items from Manager.io for use in the WhatsApp catalog menu.
- * Tries /inventory-items first, falls back to /items.
  * Returns an empty array (never throws).
  *
  * @returns {Promise<Array>}
@@ -236,20 +234,15 @@ const createInvoice = async ({ customerKey, orderId, product, phone }) => {
 const getInventoryItems = async () => {
   if (!isConfigured()) return [];
 
-  for (var i = 0; i < 2; i++) {
-    var path = i === 0 ? '/inventory-items' : '/items';
-    try {
-      const res  = await client().get(path);
-      const data = Array.isArray(res.data) ? res.data : [];
-      if (data.length > 0) {
-        logger.info('Manager: inventory fetched', { count: data.length, path: path });
-        return data;
-      }
-    } catch (_) { /* try next path */ }
+  try {
+    const res  = await client().get('/inventory-item-form');
+    const data = Array.isArray(res.data) ? res.data : [];
+    logger.info('Manager: inventory fetched', { count: data.length });
+    return data;
+  } catch (err) {
+    logger.warn('Manager: getInventoryItems failed (non-fatal)', { error: err.message });
+    return [];
   }
-
-  logger.warn('Manager: inventory fetch returned no items');
-  return [];
 };
 
 module.exports = {

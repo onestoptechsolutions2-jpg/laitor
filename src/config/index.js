@@ -25,13 +25,11 @@ module.exports = {
     url: optional('REDIS_URL', 'redis://laitor_cache:6379'),
   },
   manager: {
-    // MANAGER_URL          = full HTTPS API2 base, e.g. https://finance360.laitor.co.ke/api2
-    // MANAGER_API_KEY      = API key from Manager.io Settings -> API  (sent as X-API-KEY header)
-    // MANAGER_BUSINESS_KEY = business key visible as query-string in Manager.io URL when logged in
-    //                        e.g. https://finance360.laitor.co.ke/sales-invoices?<THIS_VALUE>
-    url:         optional('MANAGER_URL'),
-    apiKey:      optional('MANAGER_API_KEY'),
-    businessKey: optional('MANAGER_BUSINESS_KEY'),
+    // MANAGER_URL     = full HTTPS API2 base, e.g. https://finance360.laitor.co.ke/api2
+    // MANAGER_API_KEY = API key from Manager.io Settings -> API (sent as X-API-KEY header)
+    //                   Business is resolved server-side from the key -- no business key needed.
+    url:    optional('MANAGER_URL'),
+    apiKey: optional('MANAGER_API_KEY'),
   },
   webhook: {
     secret: optional('WEBHOOK_SECRET', 'laitor_webhook_secret'),

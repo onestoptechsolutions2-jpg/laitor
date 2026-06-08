@@ -518,23 +518,21 @@ router.get('/diagnostics', async (_req, res) => {
 
   // ── Manager.io ──
   const mgrStart = t();
-  if (!config.manager.url || !config.manager.apiKey || !config.manager.businessKey) {
+  if (!config.manager.url || !config.manager.apiKey) {
     results.manager = {
       ok: false,
-      error: 'MANAGER_URL, MANAGER_API_KEY, or MANAGER_BUSINESS_KEY not set',
+      error: 'MANAGER_URL or MANAGER_API_KEY not set',
       configured: false,
       missing: [
-        !config.manager.url         && 'MANAGER_URL',
-        !config.manager.apiKey      && 'MANAGER_API_KEY',
-        !config.manager.businessKey && 'MANAGER_BUSINESS_KEY',
+        !config.manager.url    && 'MANAGER_URL',
+        !config.manager.apiKey && 'MANAGER_API_KEY',
       ].filter(Boolean),
     };
   } else {
     try {
       const axios = require('axios');
-      // X-API-KEY header (not Authorization: Bearer); business-scoped endpoint
-      const endpoint = `${config.manager.url}/${encodeURIComponent(config.manager.businessKey)}/customers`;
-      const r = await axios.get(endpoint, {
+      // X-API-KEY header; business resolved server-side from key — no business key in URL
+      const r = await axios.get(`${config.manager.url}/customer-form`, {
         headers: { 'X-API-KEY': config.manager.apiKey, 'Content-Type': 'application/json' },
         timeout: 8000,
         maxRedirects: 0,
