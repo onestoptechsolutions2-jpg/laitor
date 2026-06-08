@@ -28,6 +28,7 @@ const logger  = require('./utils/logger');
 const { pool }       = require('./models/db');
 const session        = require('./services/session');
 const syncQueue      = require('./services/sync-queue');
+const cfgStore       = require('./services/config-store');
 
 const webhookRouter  = require('./routes/webhook');
 const contactsRouter = require('./routes/contacts');
@@ -90,6 +91,9 @@ const start = async () => {
   try {
     await pool.query('SELECT 1');
     logger.info('Database connected');
+
+    // Seed bot config defaults (safe on re-run)
+    await cfgStore.seedDefaults();
 
     // Start background sync retry worker
     syncQueue.startWorker();

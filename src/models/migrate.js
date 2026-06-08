@@ -184,6 +184,35 @@ ALTER TABLE orders    ADD COLUMN IF NOT EXISTS quote_id        INT;
 ALTER TABLE tickets   ADD COLUMN IF NOT EXISTS agent_id        INT;
 ALTER TABLE catalog_cache ADD COLUMN IF NOT EXISTS category_id INT;
 
+
+/* ── Bot configuration (editable from admin dashboard) ── */
+CREATE TABLE IF NOT EXISTS bot_config (
+  id         SERIAL PRIMARY KEY,
+  key        VARCHAR(100) UNIQUE NOT NULL,
+  value      TEXT         NOT NULL,
+  updated_at TIMESTAMPTZ  DEFAULT NOW()
+);
+
+/* ── WhatsApp main menu items (editable from admin dashboard) ── */
+CREATE TABLE IF NOT EXISTS menu_items (
+  id            SERIAL PRIMARY KEY,
+  label         VARCHAR(100) NOT NULL,
+  description   VARCHAR(255),
+  icon          VARCHAR(10)  DEFAULT '📌',
+  action        VARCHAR(50)  NOT NULL,
+  display_order INT          DEFAULT 0,
+  active        BOOLEAN      DEFAULT true,
+  created_at    TIMESTAMPTZ  DEFAULT NOW()
+);
+
+/* ── Seed default menu items ── */
+INSERT INTO menu_items (label, description, icon, action, display_order) VALUES
+  ('Internet Packages',    'Browse our internet plans',         '📶', 'INTERNET_BROWSE', 1),
+  ('Products & Equipment', 'CCTV, routers, networking gear',    '📦', 'PRODUCT_BROWSE',  2),
+  ('Technical Support',    'Report an issue or fault',          '🔧', 'SUPPORT_AWAIT',   3),
+  ('Speak to an Agent',    'Get help from our team directly',   '👤', 'AGENT_HANDOFF',   4)
+ON CONFLICT DO NOTHING;
+
 /* ── Indexes ── */
 CREATE INDEX IF NOT EXISTS idx_customers_phone      ON customers(phone);
 CREATE INDEX IF NOT EXISTS idx_customers_consent    ON customers(consent_status);

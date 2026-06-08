@@ -152,7 +152,7 @@ const handleKYCName = async ({ text, customer, phone }) => {
   }
   return {
     nextState: STATES.MAIN_MENU,
-    replies:   [{ type: 'text', text: `Thanks ${name}! You're all set. 🎉` }, ...menu.MAIN_MENU],
+    replies:   [{ type: 'text', text: `Thanks ${name}! You're all set. 🎉` }, ...(await menu.buildMainMenu())],
   };
 };
 
@@ -178,7 +178,7 @@ const handleKYCLocation = async ({ text, customer, phone }) => {
     nextState: STATES.MAIN_MENU,
     replies: [
       { type: 'text', text: `Got it — *${location}*. We now have your full details on file. 📋` },
-      ...menu.MAIN_MENU,
+      ...(await menu.buildMainMenu()),
     ],
   };
 };
@@ -272,9 +272,9 @@ const handleMainMenu = async ({ text }) => {
     const products = catalog.splitByType(cat).products;
     return { nextState: STATES.PRODUCT_BROWSE, replies: menu.buildProductMenu(products), sessionData: { catalogProducts: products } };
   }
-  if (choice === '3') return { nextState: STATES.SUPPORT_AWAIT, replies: menu.SUPPORT_PROMPT };
-  if (choice === '4') return { nextState: STATES.AGENT_HANDOFF, replies: menu.AGENT_HANDOFF };
-  return { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+  if (choice === '3') return { nextState: STATES.SUPPORT_AWAIT, replies: await menu.buildSupportPrompt() };
+  if (choice === '4') return { nextState: STATES.AGENT_HANDOFF, replies: await menu.buildAgentHandoff() };
+  return { nextState: STATES.MAIN_MENU, replies: await menu.buildMainMenu() };
 };
 
 const handleInternetBrowse = async ({ text, sess }) => {
@@ -321,7 +321,7 @@ const handleConfirm = async ({ text, customer, phone, name, sess, orderType }) =
       nextState: STATES.MAIN_MENU,
       replies: [
         { type: 'text', text: `✅ Order confirmed for: *${item.name}*\n\nOur team will reach out to arrange delivery or installation.\n\nRef: *#${order?.id || 'WA-' + Date.now()}*` },
-        ...menu.MAIN_MENU,
+        ...(await menu.buildMainMenu()),
       ],
     };
   }
@@ -338,7 +338,7 @@ const handleSupportAwait = async ({ text, customer, phone, name }) => {
     nextState: STATES.MAIN_MENU,
     replies: [
       { type: 'text', text: `✅ Support ticket *#${ticket?.id || '?'}* logged.\n\nOur technical team will reach out shortly.` },
-      ...menu.MAIN_MENU,
+      ...(await menu.buildMainMenu()),
     ],
   };
 };
@@ -367,7 +367,7 @@ const handleQuotePending = async ({ text, customer, phone, sess }) => {
   if (tap === 'QUOTE_APPROVE' || tap === '1') {
     try {
       const quoteId = sess.pendingQuoteId;
-      if (!quoteId) return { nextState: STATES.MAIN_MENU, replies: [{ type: 'text', text: 'Quote not found. Please contact our team.' }, ...menu.MAIN_MENU] };
+      if (!quoteId) return { nextState: STATES.MAIN_MENU, replies: [{ type: 'text', text: 'Quote not found. Please contact our team.' }, ...(await menu.buildMainMenu())] };
 
       const { invoiceRef } = await quoteSvc.approve(quoteId, customer);
 
@@ -385,12 +385,12 @@ const handleQuotePending = async ({ text, customer, phone, sess }) => {
               `Our team will follow up with next steps. — Laitor Team`,
             ].join('\n'),
           },
-          ...menu.MAIN_MENU,
+          ...(await menu.buildMainMenu()),
         ],
       };
     } catch (err) {
       logger.error('Quote approval error', { phone, error: err.message });
-      return { nextState: STATES.MAIN_MENU, replies: [{ type: 'text', text: 'Sorry, we could not process your approval. Please contact our team directly.' }, ...menu.MAIN_MENU] };
+      return { nextState: STATES.MAIN_MENU, replies: [{ type: 'text', text: 'Sorry, we could not process your approval. Please contact our team directly.' }, ...(await menu.buildMainMenu())] };
     }
   }
 
@@ -405,7 +405,7 @@ const handleQuotePending = async ({ text, customer, phone, sess }) => {
       nextState: STATES.MAIN_MENU,
       replies: [
         { type: 'text', text: `Understood — quote declined. Our team will reach out if you have any questions.\n\nFeel free to browse our services again.` },
-        ...menu.MAIN_MENU,
+        ...(await menu.buildMainMenu()),
       ],
     };
   }
@@ -442,7 +442,7 @@ const process = async (msg) => {
   if (/^stop$/i.test(text.trim())) {
     await consent.denyConsent(phone);
     await query(`UPDATE customers SET consent_status = 'denied' WHERE phone = $1`, [phone]);
-    await whatsapp.sendSequence(phone, menu.OPT_OUT_CONFIRM);
+    await whatsapp.sendSequence(phone, await menu.buildOptOutConfirm());
     return;
   }
 
@@ -486,7 +486,7 @@ const process = async (msg) => {
     }
 
     if (!sess.consentSent) {
-      await whatsapp.sendSequence(phone, consent.CONSENT_MESSAGE);
+      await whatsapp.sendSequence(phone, await menu.buildConsentMessage());
       await session.set(phone, { ...sess, state: STATES.CONSENT_PENDING, consentSent: true, customerId: customer.id });
     } else {
       const consentReply = consent.parseConsentReply(text);
@@ -502,13 +502,13 @@ const process = async (msg) => {
           await whatsapp.sendText(phone, `Thank you! 🎉\n\nWhich area or estate are you in?`);
           await session.set(phone, { state: STATES.KYC_LOCATION, customerId: customer.id });
         } else {
-          await whatsapp.sendSequence(phone, [{ type: 'text', text: 'Thank you! You are now connected to *Laitor Invest*. 🎉' }, ...menu.MAIN_MENU]);
+          await whatsapp.sendSequence(phone, [{ type: 'text', text: 'Thank you! You are now connected to *Laitor Invest*. 🎉' }, ...(await menu.buildMainMenu())]);
           await session.set(phone, { state: STATES.MAIN_MENU, customerId: customer.id });
         }
       } else if (consentReply === consent.CONSENT_STATUS.DENIED) {
         await consent.denyConsent(phone);
         await query(`UPDATE customers SET consent_status = 'denied' WHERE phone = $1`, [phone]);
-        await whatsapp.sendSequence(phone, menu.OPT_OUT_CONFIRM);
+        await whatsapp.sendSequence(phone, await menu.buildOptOutConfirm());
       } else {
         await whatsapp.sendText(phone, 'Please tap *Yes, I accept* or *No, opt out*.');
         await session.set(phone, { ...sess, state: STATES.CONSENT_PENDING });
@@ -540,7 +540,7 @@ const process = async (msg) => {
 
   try {
     if (wantsMenu) {
-      result = { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+      result = { nextState: STATES.MAIN_MENU, replies: await menu.buildMainMenu() };
     } else if (currentState === STATES.KYC_NAME) {
       result = await handleKYCName({ text, customer, phone });
     } else if (currentState === STATES.KYC_LOCATION) {
@@ -563,11 +563,11 @@ const process = async (msg) => {
       logger.info('Message in agent handoff — not auto-replied', { phone });
       return;
     } else {
-      result = { nextState: STATES.MAIN_MENU, replies: menu.MAIN_MENU };
+      result = { nextState: STATES.MAIN_MENU, replies: await menu.buildMainMenu() };
     }
   } catch (err) {
     logger.error('Orchestrator handler error', { phone, state: currentState, error: err.message, stack: err.stack });
-    result = { nextState: STATES.MAIN_MENU, replies: [{ type: 'text', text: 'We encountered an issue. Type *MENU* to try again.' }] };
+    result = { nextState: STATES.MAIN_MENU, replies: [{ type: 'text', text: 'We encountered an issue. Type *MENU* to try again.' }, ...(await menu.buildMainMenu())] };
   }
 
   const newSess = {
