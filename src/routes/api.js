@@ -43,6 +43,7 @@ const agentSvc = require('../services/agents');
 const quoteSvc = require('../services/quote');
 const syncQ    = require('../services/sync-queue');
 const biSync   = require('../services/bidirectional-sync');
+const invoice  = require('../services/invoice');
 const whatsapp = require('../services/whatsapp');
 const cfgStore = require('../services/config-store');
 const config   = require('../config');
@@ -509,6 +510,76 @@ router.put('/sync/config', async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
+});
+
+
+// ── Invoices ──────────────────────────────────────────────────────────────────
+
+router.get('/invoices', async (req, res) => {
+  try {
+    await invoice.markOverdue();
+    const result = await invoice.list({
+      status:     req.query.status     || '',
+      customerId: req.query.customerId || null,
+      limit:      Math.min(parseInt(req.query.limit  || '50',  10), 200),
+      offset:     parseInt(req.query.offset || '0', 10),
+    });
+    return res.json(result);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+router.get('/invoices/:id', async (req, res) => {
+  try {
+    const inv = await invoice.getById(req.params.id);
+    if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+    return res.json(inv);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+router.get('/invoices/:id/html', async (req, res) => {
+  try {
+    const inv = await invoice.getById(req.params.id);
+    if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(invoice.buildHtml(inv));
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+router.post('/invoices', async (req, res) => {
+  const { customerId, orderId, quoteId, lineItems, taxRate, notes, dueDate, currency } = req.body || {};
+  if (!customerId)       return res.status(400).json({ error: 'customerId is required' });
+  if (!lineItems?.length) return res.status(400).json({ error: 'lineItems array is required' });
+  try {
+    const inv = await invoice.create({ customerId, orderId, quoteId, lineItems, taxRate, notes, dueDate, currency });
+    return res.status(201).json({ success: true, invoice: inv });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+router.put('/invoices/:id/send', async (req, res) => {
+  try {
+    const inv = await invoice.markSent(req.params.id);
+    return res.json({ success: true, invoice: inv });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+router.put('/invoices/:id/cancel', async (req, res) => {
+  try {
+    const inv = await invoice.markCancelled(req.params.id);
+    return res.json({ success: true, invoice: inv });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+router.post('/invoices/:id/payments', async (req, res) => {
+  const { amount, method, reference, notes } = req.body || {};
+  if (!amount || parseFloat(amount) <= 0) return res.status(400).json({ error: 'amount is required' });
+  try {
+    const result = await invoice.recordPayment({
+      invoiceId: req.params.id,
+      amount: parseFloat(amount),
+      method, reference, notes,
+    });
+    return res.status(201).json({ success: true, ...result });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
 // ── Content & Flows ───────────────────────────────────────────────────────────

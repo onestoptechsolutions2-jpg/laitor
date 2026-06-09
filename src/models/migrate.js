@@ -179,6 +179,42 @@ CREATE TABLE IF NOT EXISTS menu_items (
   created_at    TIMESTAMPTZ  DEFAULT NOW()
 );
 
+
+/* ── Invoices (built-in accounting) ── */
+CREATE TABLE IF NOT EXISTS invoices (
+  id              SERIAL PRIMARY KEY,
+  invoice_number  VARCHAR(50) UNIQUE NOT NULL,
+  customer_id     INT REFERENCES customers(id),
+  order_id        INT REFERENCES orders(id),
+  quote_id        INT REFERENCES quotes(id),
+  status          VARCHAR(20)   DEFAULT 'draft',
+  line_items      JSONB         NOT NULL DEFAULT '[]',
+  subtotal        DECIMAL(10,2) DEFAULT 0,
+  tax_rate        DECIMAL(5,2)  DEFAULT 16,
+  tax_amount      DECIMAL(10,2) DEFAULT 0,
+  total           DECIMAL(10,2) DEFAULT 0,
+  amount_paid     DECIMAL(10,2) DEFAULT 0,
+  currency        VARCHAR(10)   DEFAULT 'KES',
+  due_date        DATE,
+  notes           TEXT,
+  sent_at         TIMESTAMPTZ,
+  paid_at         TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+/* ── Payments against invoices ── */
+CREATE TABLE IF NOT EXISTS payments (
+  id           SERIAL PRIMARY KEY,
+  invoice_id   INT REFERENCES invoices(id),
+  amount       DECIMAL(10,2) NOT NULL,
+  method       VARCHAR(50)  DEFAULT 'mpesa',
+  reference    VARCHAR(255),
+  notes        TEXT,
+  recorded_at  TIMESTAMPTZ DEFAULT NOW(),
+  created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
 /* ── Safe column additions for existing installs ── */
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS consent_status  VARCHAR(20)  DEFAULT 'pending';
 ALTER TABLE customers ADD COLUMN IF NOT EXISTS consented_at    TIMESTAMPTZ;
@@ -215,6 +251,9 @@ CREATE INDEX IF NOT EXISTS idx_quotes_status        ON quotes(status);
 CREATE INDEX IF NOT EXISTS idx_sync_queue_status    ON sync_queue(status);
 CREATE INDEX IF NOT EXISTS idx_sync_queue_retry     ON sync_queue(next_retry_at);
 
+CREATE INDEX IF NOT EXISTS idx_invoices_customer  ON invoices(customer_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_status    ON invoices(status);
+CREATE INDEX IF NOT EXISTS idx_payments_invoice   ON payments(invoice_id);
 /* ── Seed default categories if empty ── */
 INSERT INTO categories (name, slug, display_order) VALUES
   ('Internet Packages',    'internet',  1),

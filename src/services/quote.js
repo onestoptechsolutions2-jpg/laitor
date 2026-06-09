@@ -163,6 +163,29 @@ const approve = async (quoteId, customer) => {
     items,
   });
 
+  // Also create a local (built-in accounting) invoice
+  let localInvoice = null;
+  try {
+    localInvoice = await invoiceSvc.create({
+      customerId: customer.id,
+      quoteId:    quote.id,
+      orderId:    quote.order_id || undefined,
+      lineItems:  items.map(i => ({
+        description: i.name || i.description || 'Service',
+        qty:         i.qty   || 1,
+        unitPrice:   i.price || i.unitPrice || 0,
+      })),
+      notes:    `Quote #${quote.id} approved`,
+      currency: quote.currency || 'KES',
+    });
+    logger.info('quote: local invoice created', { invoiceId: localInvoice.id, invoiceNumber: localInvoice.invoice_number });
+  } catch (invErr) {
+    logger.warn('quote: local invoice creation failed (non-fatal)', { quoteId, error: invErr.message });
+  }
+
+  // Prefer local invoice number as the reference if we got one
+  const finalInvoiceRef = localInvoice?.invoice_number || invoiceRef;
+
   // Mark quote approved
   await query(
     `UPDATE quotes SET status = 'invoiced', approved_at = NOW(), updated_at = NOW() WHERE id = $1`,
@@ -173,7 +196,7 @@ const approve = async (quoteId, customer) => {
   if (quote.order_id) {
     await query(
       `UPDATE orders SET invoice_ref = $1, status = 'confirmed', updated_at = NOW() WHERE id = $2`,
-      [invoiceRef, quote.order_id]
+      [finalInvoiceRef, quote.order_id]
     );
   }
 
@@ -196,7 +219,7 @@ const approve = async (quoteId, customer) => {
   });
 
   logger.info('quote: approved + invoiced', { quoteId, invoiceRef, phone: customer.phone });
-  return { quote: { ...quote, status: 'invoiced' }, invoiceRef };
+  return { quote: { ...quote, status: 'invoiced' }, invoiceRef: finalInvoiceRef, localInvoice };
 };
 
 // ── Decline ───────────────────────────────────────────────────────────────────

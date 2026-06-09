@@ -502,6 +502,10 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
       Quotes
     </button>
+    <button class="nav-link" onclick="nav('invoices',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      Invoices
+    </button>
     <button class="nav-link" onclick="nav('tickets',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
       Tickets
@@ -781,6 +785,114 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
             <tbody id="quotes-body"></tbody></table>
           </div>
         </div>
+      </div>
+    </section>
+
+    <!-- ════════ INVOICES ════════ -->
+    <section id="invoices" class="section">
+      <div class="topbar">
+        <div class="topbar-left"><button class="hamburger" onclick="openSidebar()">☰</button><h1>Invoices</h1></div>
+        <div class="topbar-actions">
+          <select id="inv-status-filter" class="form-control" style="width:130px;font-size:13px" onchange="loadInvoices()">
+            <option value="">All statuses</option>
+            <option value="draft">Draft</option>
+            <option value="sent">Sent</option>
+            <option value="partial">Partial</option>
+            <option value="paid">Paid</option>
+            <option value="overdue">Overdue</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <button class="btn btn-primary btn-sm" onclick="toggleForm('inv-form')">+ New Invoice</button>
+        </div>
+      </div>
+      <div class="content">
+
+        <!-- Create invoice form -->
+        <div id="inv-form" class="card" style="display:none;margin-bottom:16px">
+          <div class="card-header"><strong>New Invoice</strong></div>
+          <div class="card-body">
+            <div class="form-row">
+              <div class="form-group" style="flex:1">
+                <label class="form-label">Customer Phone *</label>
+                <input id="inv-phone" class="form-control" placeholder="254712345678" oninput="lookupInvCustomer()">
+                <div id="inv-customer-name" style="font-size:12px;color:var(--accent);margin-top:4px"></div>
+                <input type="hidden" id="inv-customer-id">
+              </div>
+              <div class="form-group" style="flex:1">
+                <label class="form-label">Due Date</label>
+                <input id="inv-due" type="date" class="form-control">
+              </div>
+              <div class="form-group" style="flex:0 0 100px">
+                <label class="form-label">VAT %</label>
+                <input id="inv-tax" type="number" class="form-control" value="16" min="0" max="100">
+              </div>
+            </div>
+            <!-- Line items -->
+            <div style="margin:12px 0 6px;font-weight:600;font-size:13px">Line Items</div>
+            <div id="inv-lines">
+              <div class="inv-line form-row" style="gap:8px;margin-bottom:6px">
+                <input class="form-control" placeholder="Description" style="flex:3" name="desc">
+                <input class="form-control" placeholder="Qty" type="number" value="1" style="flex:0 0 60px" name="qty">
+                <input class="form-control" placeholder="Unit Price" type="number" style="flex:1" name="price">
+                <button onclick="this.closest('.inv-line').remove()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;padding:4px">✕</button>
+              </div>
+            </div>
+            <button onclick="addInvLine()" class="btn btn-outline btn-sm" style="margin-bottom:12px">+ Add Line</button>
+            <div class="form-group">
+              <label class="form-label">Notes</label>
+              <input id="inv-notes" class="form-control" placeholder="Optional notes for customer">
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn btn-primary" onclick="createInvoice()">Create Invoice</button>
+              <button class="btn btn-outline" onclick="toggleForm('inv-form')">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Invoice list -->
+        <div class="card">
+          <div style="overflow-x:auto">
+            <table class="table">
+              <thead><tr>
+                <th>Invoice #</th><th>Customer</th><th>Total (KES)</th>
+                <th>Paid (KES)</th><th>Status</th><th>Due</th><th>Actions</th>
+              </tr></thead>
+              <tbody id="inv-body"><tr><td colspan="7" style="text-align:center;color:var(--muted);padding:32px">Loading…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Record payment modal -->
+        <div id="pay-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:999;align-items:center;justify-content:center">
+          <div class="card" style="width:360px;max-width:95vw">
+            <div class="card-header"><strong>Record Payment</strong> <span id="pay-inv-num" style="color:var(--muted)"></span></div>
+            <div class="card-body">
+              <input type="hidden" id="pay-inv-id">
+              <div class="form-group">
+                <label class="form-label">Amount (KES) *</label>
+                <input id="pay-amount" type="number" class="form-control" placeholder="0.00">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Method</label>
+                <select id="pay-method" class="form-control">
+                  <option value="mpesa">M-Pesa</option>
+                  <option value="cash">Cash</option>
+                  <option value="bank">Bank Transfer</option>
+                  <option value="card">Card</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Reference (e.g. M-Pesa code)</label>
+                <input id="pay-ref" class="form-control" placeholder="QHJ7X...">
+              </div>
+              <div style="display:flex;gap:8px;margin-top:12px">
+                <button class="btn btn-primary" onclick="submitPayment()">Record Payment</button>
+                <button class="btn btn-outline" onclick="document.getElementById('pay-modal').style.display='none'">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
     </section>
 
@@ -1164,6 +1276,7 @@ function nav(id, el) {
     dashboard:  loadDashboard,
     contacts:   loadContacts,
     orders:     loadOrders,
+    invoices:   loadInvoices,
     tickets:    loadTickets,
     quotes:     loadQuotes,
     outreach:   loadPending,
@@ -1722,6 +1835,123 @@ async function deleteMenuItem(id) {
   if (!confirm('Delete this menu item?')) return;
   await fetch(API + '/api/v1/content/menu-items/' + id, { method: 'DELETE' });
   loadMenuItems(); toast('Deleted');
+}
+
+// ── Invoices ──────────────────────────────────────────────────────────────────
+let _invLookupTimer = null;
+
+function addInvLine() {
+  const div = document.createElement('div');
+  div.className = 'inv-line form-row';
+  div.style.cssText = 'gap:8px;margin-bottom:6px';
+  div.innerHTML = `<input class="form-control" placeholder="Description" style="flex:3" name="desc">
+    <input class="form-control" placeholder="Qty" type="number" value="1" style="flex:0 0 60px" name="qty">
+    <input class="form-control" placeholder="Unit Price" type="number" style="flex:1" name="price">
+    <button onclick="this.closest('.inv-line').remove()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;padding:4px">✕</button>`;
+  document.getElementById('inv-lines').appendChild(div);
+}
+
+function lookupInvCustomer() {
+  clearTimeout(_invLookupTimer);
+  _invLookupTimer = setTimeout(async () => {
+    const phone = document.getElementById('inv-phone').value.trim();
+    if (phone.length < 9) return;
+    try {
+      const d = await fetch(API + '/api/v1/customers?q=' + encodeURIComponent(phone) + '&limit=1').then(r => r.json());
+      if (d.customers?.length) {
+        document.getElementById('inv-customer-id').value = d.customers[0].id;
+        document.getElementById('inv-customer-name').textContent = '✓ ' + (d.customers[0].name || d.customers[0].phone);
+      } else {
+        document.getElementById('inv-customer-id').value = '';
+        document.getElementById('inv-customer-name').textContent = 'Customer not found';
+      }
+    } catch(e) {}
+  }, 600);
+}
+
+async function createInvoice() {
+  const customerId = document.getElementById('inv-customer-id').value;
+  if (!customerId) { toast('Customer not found — enter a valid phone', true); return; }
+  const lines = [...document.querySelectorAll('.inv-line')].map(row => ({
+    description: row.querySelector('[name=desc]').value.trim(),
+    qty:         parseInt(row.querySelector('[name=qty]').value) || 1,
+    unitPrice:   parseFloat(row.querySelector('[name=price]').value) || 0,
+  })).filter(l => l.description);
+  if (!lines.length) { toast('Add at least one line item', true); return; }
+  try {
+    const d = await fetch(API + '/api/v1/invoices', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        customerId,
+        lineItems: lines,
+        taxRate:   parseFloat(document.getElementById('inv-tax').value) || 16,
+        dueDate:   document.getElementById('inv-due').value || undefined,
+        notes:     document.getElementById('inv-notes').value || undefined,
+      }),
+    }).then(r => r.json());
+    if (d.error) { toast('Error: ' + d.error, true); return; }
+    toast('Invoice ' + d.invoice.invoice_number + ' created');
+    toggleForm('inv-form');
+    loadInvoices();
+  } catch(e) { toast('Failed: ' + e.message, true); }
+}
+
+async function loadInvoices() {
+  const status = document.getElementById('inv-status-filter')?.value || '';
+  try {
+    const params = new URLSearchParams({ limit: 50, offset: 0 });
+    if (status) params.set('status', status);
+    const d = await fetch(API + '/api/v1/invoices?' + params).then(r => r.json());
+    const tbody = document.getElementById('inv-body');
+    if (!d.invoices?.length) {
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:32px">No invoices yet</td></tr>';
+      return;
+    }
+    const statusColour = { draft:'grey', sent:'blue', partial:'yellow', paid:'green', overdue:'red', cancelled:'grey' };
+    tbody.innerHTML = d.invoices.map(inv => {
+      const balance = (parseFloat(inv.total)||0) - (parseFloat(inv.amount_paid)||0);
+      return `<tr>
+        <td><a href="${API}/api/v1/invoices/${inv.id}/html" target="_blank" style="color:var(--accent);text-decoration:none;font-weight:600">${inv.invoice_number}</a></td>
+        <td>${inv.customer_name||'—'}<br><small style="color:var(--muted)">${inv.customer_phone||''}</small></td>
+        <td style="font-weight:600">${parseFloat(inv.total||0).toLocaleString('en-KE',{minimumFractionDigits:2})}</td>
+        <td style="color:var(--green)">${parseFloat(inv.amount_paid||0).toLocaleString('en-KE',{minimumFractionDigits:2})}</td>
+        <td><span class="badge badge-${statusColour[inv.status]||'grey'}">${inv.status}</span></td>
+        <td style="font-size:12px;color:${inv.status==='overdue'?'var(--red)':'var(--muted)'}">${inv.due_date ? inv.due_date.split('T')[0] : '—'}</td>
+        <td style="white-space:nowrap">
+          ${inv.status !== 'paid' && inv.status !== 'cancelled' ? `<button class="btn btn-outline btn-sm" onclick="openPayModal(${inv.id},'${inv.invoice_number}',${balance})">💳 Pay</button>` : ''}
+          <a href="${API}/api/v1/invoices/${inv.id}/html" target="_blank" class="btn btn-outline btn-sm" style="text-decoration:none">🖨 PDF</a>
+        </td>
+      </tr>`;
+    }).join('');
+  } catch(e) { console.error('loadInvoices', e); }
+}
+
+function openPayModal(id, num, balance) {
+  document.getElementById('pay-inv-id').value  = id;
+  document.getElementById('pay-inv-num').textContent = num;
+  document.getElementById('pay-amount').value  = balance > 0 ? balance.toFixed(2) : '';
+  document.getElementById('pay-ref').value     = '';
+  document.getElementById('pay-modal').style.display = 'flex';
+}
+
+async function submitPayment() {
+  const invoiceId = document.getElementById('pay-inv-id').value;
+  const amount    = parseFloat(document.getElementById('pay-amount').value);
+  const method    = document.getElementById('pay-method').value;
+  const reference = document.getElementById('pay-ref').value;
+  if (!amount || amount <= 0) { toast('Enter a valid amount', true); return; }
+  try {
+    const d = await fetch(API + '/api/v1/invoices/' + invoiceId + '/payments', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ amount, method, reference }),
+    }).then(r => r.json());
+    if (d.error) { toast('Error: ' + d.error, true); return; }
+    toast('Payment recorded — status: ' + d.invoice.status);
+    document.getElementById('pay-modal').style.display = 'none';
+    loadInvoices();
+  } catch(e) { toast('Failed: ' + e.message, true); }
 }
 
 // ── Sync ─────────────────────────────────────────────────────────────────────
