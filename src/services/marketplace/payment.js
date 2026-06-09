@@ -23,6 +23,7 @@ const axios  = require('axios');
 const { query } = require('../../models/db');
 const logger = require('../../utils/logger');
 
+
 const ENV       = process.env.MPESA_ENV || 'sandbox';
 const BASE_URL  = ENV === 'production'
   ? 'https://api.safaricom.co.ke'
@@ -215,7 +216,7 @@ const handleCallback = async (body) => {
         [receipt, amount, order.id]
       );
       logger.info('M-Pesa: payment confirmed', { orderId: order.id, receipt, amount });
-      return { orderId: order.id, success: true, receipt, amount };
+      // Mirror payment to Supabase      return { orderId: order.id, success: true, receipt, amount };
     }
 
     if (order) {

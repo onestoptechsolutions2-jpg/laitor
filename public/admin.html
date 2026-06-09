@@ -912,6 +912,26 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
       Sources
     </button>
+    <button class="nav-link" onclick="nav('campaigns',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22l-4-9-9-4 20-7z"/></svg>
+      Campaigns
+    </button>
+    <button class="nav-link" onclick="nav('broadcasts',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M4.93 4.93a10 10 0 000 14.14M8.76 8.76a5 5 0 000 6.48M15.24 8.76a5 5 0 010 6.48M19.07 4.93a10 10 0 010 14.14"/></svg>
+      Broadcasts
+    </button>
+    <button class="nav-link" onclick="nav('commissions',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+      Commissions
+    </button>
+    <button class="nav-link" onclick="nav('deliveries',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+      Deliveries
+    </button>
+    <button class="nav-link" onclick="nav('suppliers',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      Suppliers
+    </button>
     <!-- ════════ MARKETPLACE: PRODUCTS ════════ -->
     <section id="mkt-products" class="section">
       <div class="topbar">
@@ -1508,6 +1528,11 @@ function nav(id, el) {
     "mkt-orders":   loadMktOrders,
     "mkt-reports":  loadMktReports,
     "mkt-sources":  loadMktSources,
+    campaigns:      loadCampaigns,
+    broadcasts:     loadBroadcasts,
+    commissions:    loadCommissions,
+    deliveries:     loadDeliveries,
+    suppliers:      loadSuppliers,
     tickets:    loadTickets,
     quotes:     loadQuotes,
     outreach:   loadPending,
@@ -2382,7 +2407,9 @@ async function saveSource() {
 })();
 
 // Set default date range (last 30 days) on reports tab
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  const ok = await checkAuth();
+  if (!ok) return;
   const toEl   = document.getElementById('rpt-to');
   const fromEl = document.getElementById('rpt-from');
   if (toEl && fromEl) {
@@ -2628,6 +2655,288 @@ async function runDiagnostics() {
   }
   btn.disabled = false; btn.textContent = '▶ Run Tests';
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CAMPAIGNS
+// ═══════════════════════════════════════════════════════════════════════════
+function openCampaignForm() {
+  document.getElementById('campaign-modal').style.cssText='display:flex;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center';
+}
+function closeCampaignForm() {
+  document.getElementById('campaign-modal').style.display='none';
+}
+async function previewCampaign() {
+  const filter = buildCampaignFilter();
+  const r = await fetch('/api/v1/campaigns/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({segment_filter:filter})});
+  const d = await r.json();
+  const el = document.getElementById('cp-preview');
+  el.style.display='block';
+  el.textContent = `${d.count} contacts match this filter. Sample: ${(d.sample||[]).map(s=>s.name||s.phone).join(', ')}`;
+}
+function buildCampaignFilter() {
+  const seg   = document.getElementById('cp-segment').value;
+  const score = parseInt(document.getElementById('cp-minscore').value)||0;
+  const opted = document.getElementById('cp-optedin').checked;
+  const f = { opted_in_only: opted, min_score: score };
+  if (seg) f.segments = [seg];
+  return f;
+}
+async function saveCampaign() {
+  const name = document.getElementById('cp-name').value.trim();
+  const msg  = document.getElementById('cp-msg').value.trim();
+  if (!name||!msg) return alert('Name and message required');
+  await fetch('/api/v1/campaigns',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    name, message_template:msg, segment_filter:buildCampaignFilter()
+  })});
+  closeCampaignForm();
+  loadCampaigns();
+}
+async function loadCampaigns() {
+  const r = await fetch('/api/v1/campaigns');
+  const d = await r.json();
+  const el = document.getElementById('campaign-list');
+  if (!d.campaigns?.length) { el.innerHTML='<p style="color:#888;padding:20px">No campaigns yet.</p>'; return; }
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:#f9f9f9">${['Name','Status','Channel','Recipients','Sent','Actions'].map(h=>`<th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:#666">${h}</th>`).join('')}</tr></thead>
+    <tbody>${d.campaigns.map(c=>`<tr style="border-bottom:1px solid #f0f0f0">
+      <td style="padding:10px 14px;font-weight:600">${c.name}</td>
+      <td style="padding:10px 14px"><span style="padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;background:${statusBg(c.status)};color:${statusCol(c.status)};text-transform:capitalize">${c.status}</span></td>
+      <td style="padding:10px 14px;text-transform:capitalize">${c.channel}</td>
+      <td style="padding:10px 14px">${c.total_recipients||0}</td>
+      <td style="padding:10px 14px">${c.sent_count||0}</td>
+      <td style="padding:10px 14px"><button class="btn btn-sm" onclick="launchCampaign(${c.id})" ${c.status==='running'?'disabled':''}>Launch</button></td>
+    </tr>`).join('')}</tbody></table>`;
+}
+async function launchCampaign(id) {
+  if (!confirm('Launch this campaign? This will send WA messages to all matching contacts.')) return;
+  const r = await fetch('/api/v1/campaigns/'+id+'/launch',{method:'POST'});
+  const d = await r.json();
+  alert(`Broadcast started! ${d.recipientCount} recipients.`);
+  loadCampaigns();
+}
+function statusBg(s){return{draft:'#f4f4f5',running:'#dbeafe',completed:'#dcfce7',paused:'#fef3c7',scheduled:'#ede9fe'}[s]||'#f4f4f5';}
+function statusCol(s){return{draft:'#52525b',running:'#1d4ed8',completed:'#15803d',paused:'#b45309',scheduled:'#6d28d9'}[s]||'#52525b';}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BROADCASTS
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadBroadcasts() {
+  const r = await fetch('/api/v1/broadcasts');
+  const d = await r.json();
+  const el = document.getElementById('broadcast-list');
+  if (!d.broadcasts?.length) { el.innerHTML='<p style="color:#888;padding:20px">No broadcasts yet. Launch a campaign to create one.</p>'; return; }
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:#f9f9f9">${['Campaign','Status','Sent','Failed','Started','Finished'].map(h=>`<th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:#666">${h}</th>`).join('')}</tr></thead>
+    <tbody>${d.broadcasts.map(b=>`<tr style="border-bottom:1px solid #f0f0f0">
+      <td style="padding:10px 14px;font-weight:600">${b.campaign_name||'—'}</td>
+      <td style="padding:10px 14px"><span style="padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;background:${statusBg(b.status)};color:${statusCol(b.status)};text-transform:capitalize">${b.status}</span></td>
+      <td style="padding:10px 14px;color:#15803d">${b.sent_count}</td>
+      <td style="padding:10px 14px;color:${b.failed_count>0?'#be123c':'#888'}">${b.failed_count}</td>
+      <td style="padding:10px 14px;color:#888;font-size:12px">${b.started_at?new Date(b.started_at).toLocaleString():'—'}</td>
+      <td style="padding:10px 14px;color:#888;font-size:12px">${b.finished_at?new Date(b.finished_at).toLocaleString():'—'}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COMMISSIONS
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadCommissions() {
+  const agentId = document.getElementById('comm-agent-filter')?.value||'';
+  const status  = document.getElementById('comm-status-filter')?.value||'';
+  const params  = new URLSearchParams();
+  if (agentId) params.set('agentId',agentId);
+  if (status)  params.set('status',status);
+  const r = await fetch('/api/v1/commissions?'+params);
+  const d = await r.json();
+  const el = document.getElementById('commission-list');
+  if (!d.commissions?.length) { el.innerHTML='<p style="color:#888;padding:20px">No commissions yet.</p>'; return; }
+  const total = d.commissions.reduce((s,c)=>s+parseFloat(c.commission||0),0);
+  el.innerHTML = `<div style="margin-bottom:12px;font-weight:600;color:#15803d">Total: KES ${total.toLocaleString()}</div>
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:#f9f9f9">${['Agent','Description','Sale','Rate','Commission','Status','Actions'].map(h=>`<th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:#666">${h}</th>`).join('')}</tr></thead>
+    <tbody>${d.commissions.map(c=>`<tr style="border-bottom:1px solid #f0f0f0">
+      <td style="padding:10px 14px">${c.agent_name||'—'}</td>
+      <td style="padding:10px 14px">${c.description||'—'}</td>
+      <td style="padding:10px 14px">KES ${parseFloat(c.sale_amount||0).toLocaleString()}</td>
+      <td style="padding:10px 14px">${c.rate_pct}%</td>
+      <td style="padding:10px 14px;font-weight:600;color:#15803d">KES ${parseFloat(c.commission||0).toLocaleString()}</td>
+      <td style="padding:10px 14px"><span style="padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;background:${statusBg(c.status)};color:${statusCol(c.status)};text-transform:capitalize">${c.status}</span></td>
+      <td style="padding:10px 14px">${c.status==='pending'?`<button class="btn btn-sm" onclick="approveComm(${c.id})">Approve</button>`:'—'}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+async function approveComm(id) {
+  await fetch('/api/v1/commissions/'+id+'/approve',{method:'PUT'});
+  loadCommissions();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DELIVERIES
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadDeliveries() {
+  const status = document.getElementById('del-status-filter')?.value||'';
+  const params = new URLSearchParams();
+  if (status) params.set('status',status);
+  const r = await fetch('/api/v1/deliveries?'+params);
+  const d = await r.json();
+  const el = document.getElementById('delivery-list');
+  const delivBg = {pending:'#fef3c7',picked_up:'#dbeafe',in_transit:'#ede9fe',delivered:'#dcfce7',failed:'#ffe4e6',cancelled:'#f4f4f5'};
+  const delivCol= {pending:'#b45309',picked_up:'#1d4ed8',in_transit:'#6d28d9',delivered:'#15803d',failed:'#be123c',cancelled:'#52525b'};
+  if (!d.deliveries?.length) { el.innerHTML='<p style="color:#888;padding:20px">No delivery jobs.</p>'; return; }
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:#f9f9f9">${['Order','Customer','Rider','Address','Status','Actions'].map(h=>`<th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:#666">${h}</th>`).join('')}</tr></thead>
+    <tbody>${d.deliveries.map(dj=>`<tr style="border-bottom:1px solid #f0f0f0">
+      <td style="padding:10px 14px;font-family:monospace;font-size:12px">${dj.order_number||'—'}</td>
+      <td style="padding:10px 14px">${dj.customer_name||'—'}<div style="font-size:11px;color:#888">${dj.customer_phone||''}</div></td>
+      <td style="padding:10px 14px">${dj.rider_name||'—'}<div style="font-size:11px;color:#888">${dj.rider_phone||''}</div></td>
+      <td style="padding:10px 14px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${dj.delivery_address}</td>
+      <td style="padding:10px 14px"><span style="padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;background:${delivBg[dj.status]||'#f4f4f5'};color:${delivCol[dj.status]||'#52525b'};text-transform:capitalize">${dj.status.replace('_',' ')}</span></td>
+      <td style="padding:10px 14px">
+        ${dj.status==='pending'?`<button class="btn btn-sm" onclick="updateDelivery(${dj.id},'picked_up')">Pick Up</button>`:''}
+        ${dj.status==='picked_up'?`<button class="btn btn-sm" onclick="updateDelivery(${dj.id},'in_transit')">In Transit</button>`:''}
+        ${dj.status==='in_transit'?`<button class="btn btn-sm btn-primary" onclick="updateDelivery(${dj.id},'delivered')">Delivered ✓</button>`:''}
+      </td>
+    </tr>`).join('')}</tbody></table>`;
+}
+function openDeliveryForm(){alert('Create delivery job from an order in the WA Orders tab.');}
+async function updateDelivery(id,status){
+  await fetch('/api/v1/deliveries/'+id+'/status',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});
+  loadDeliveries();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SUPPLIERS
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadSuppliers() {
+  const r = await fetch('/api/v1/suppliers');
+  const d = await r.json();
+  const el = document.getElementById('supplier-list');
+  if (!d.suppliers?.length) { el.innerHTML='<p style="color:#888;padding:20px">No suppliers yet.</p>'; return; }
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:#f9f9f9">${['Name','Contact','Phone','Category','Lead Time','Actions'].map(h=>`<th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:#666">${h}</th>`).join('')}</tr></thead>
+    <tbody>${d.suppliers.map(s=>`<tr style="border-bottom:1px solid #f0f0f0">
+      <td style="padding:10px 14px;font-weight:600">${s.name}</td>
+      <td style="padding:10px 14px">${s.contact_name||'—'}<div style="font-size:11px;color:#888">${s.email||''}</div></td>
+      <td style="padding:10px 14px">${s.phone||'—'}</td>
+      <td style="padding:10px 14px">${s.category||'—'}</td>
+      <td style="padding:10px 14px">${s.lead_time_days} days</td>
+      <td style="padding:10px 14px"><button class="btn btn-sm" onclick="editSupplier(${JSON.stringify(s).replace(/"/g,'&quot;')})">Edit</button></td>
+    </tr>`).join('')}</tbody></table>`;
+}
+function openSupplierForm(){
+  document.getElementById('supp-id').value='';
+  document.getElementById('supp-form-title').textContent='Add Supplier';
+  ['name','contact','phone','email','location','category','terms','notes'].forEach(f=>document.getElementById('supp-'+f).value='');
+  document.getElementById('supp-leadtime').value='3';
+  document.getElementById('supplier-modal').style.cssText='display:flex;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center';
+}
+function editSupplier(s){
+  document.getElementById('supp-id').value=s.id;
+  document.getElementById('supp-form-title').textContent='Edit Supplier';
+  document.getElementById('supp-name').value=s.name||'';
+  document.getElementById('supp-contact').value=s.contact_name||'';
+  document.getElementById('supp-phone').value=s.phone||'';
+  document.getElementById('supp-email').value=s.email||'';
+  document.getElementById('supp-location').value=s.location||'';
+  document.getElementById('supp-category').value=s.category||'';
+  document.getElementById('supp-terms').value=s.payment_terms||'';
+  document.getElementById('supp-leadtime').value=s.lead_time_days||3;
+  document.getElementById('supp-notes').value=s.notes||'';
+  document.getElementById('supplier-modal').style.cssText='display:flex;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center';
+}
+function closeSupplierForm(){document.getElementById('supplier-modal').style.display='none';}
+async function saveSupplier(){
+  const id=document.getElementById('supp-id').value;
+  const body={
+    name:document.getElementById('supp-name').value,
+    contactName:document.getElementById('supp-contact').value,
+    phone:document.getElementById('supp-phone').value,
+    email:document.getElementById('supp-email').value,
+    location:document.getElementById('supp-location').value,
+    category:document.getElementById('supp-category').value,
+    paymentTerms:document.getElementById('supp-terms').value,
+    leadTimeDays:parseInt(document.getElementById('supp-leadtime').value)||3,
+    notes:document.getElementById('supp-notes').value,
+  };
+  const url = id ? '/api/v1/suppliers/'+id : '/api/v1/suppliers';
+  const method = id ? 'PUT' : 'POST';
+  await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  closeSupplierForm();
+  loadSuppliers();
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════════════════════════════════════════
+let _authUser = null;
+async function checkAuth() {
+  try {
+    const r = await fetch('/auth/me', { credentials: 'include' });
+    if (r.status === 401) { showLogin(); return false; }
+    const d = await r.json();
+    _authUser = d.user;
+    hideLogin();
+    // Show username in header if element exists
+    const el = document.getElementById('auth-username');
+    if (el) el.textContent = _authUser.username || _authUser.email || 'Admin';
+    return true;
+  } catch(e) { showLogin(); return false; }
+}
+function showLogin() {
+  const ov = document.getElementById('login-overlay');
+  if (ov) { ov.style.display='flex'; ov.style.cssText='display:flex;position:fixed;inset:0;background:#f9f9f9;z-index:9999;align-items:center;justify-content:center'; }
+}
+function hideLogin() {
+  const ov = document.getElementById('login-overlay');
+  if (ov) ov.style.display='none';
+}
+async function doLogin() {
+  const email    = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errEl    = document.getElementById('login-error');
+  if (!email||!password) { showLoginError('Email and password required'); return; }
+  try {
+    const r = await fetch('/auth/login', {
+      method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({username:email, password})
+    });
+    const d = await r.json();
+    if (!r.ok) { showLoginError(d.error||'Login failed'); return; }
+    _authUser = d.user;
+    hideLogin();
+    nav('dashboard');
+  } catch(e) { showLoginError('Network error — is the server running?'); }
+}
+function showLoginError(msg) {
+  const el = document.getElementById('login-error');
+  if (el) { el.textContent=msg; el.style.display='block'; }
+}
+async function doLogout() {
+  await fetch('/auth/logout', { method:'POST', credentials:'include' });
+  _authUser = null;
+  showLogin();
+}
+
 </script>
+
+<!-- ── LOGIN OVERLAY ────────────────────────────────────────────────── -->
+<div id="login-overlay" style="display:none;position:fixed;inset:0;background:#f9f9f9;z-index:9999;display:flex;align-items:center;justify-content:center">
+  <div style="background:#fff;border:1px solid #e8e8e8;border-radius:12px;padding:40px 36px;width:360px;box-shadow:0 4px 24px rgba(0,0,0,.08)">
+    <div style="text-align:center;margin-bottom:28px">
+      <div style="width:48px;height:48px;background:linear-gradient(135deg,#006654,#00b894);border-radius:12px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:14px">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <h2 style="margin:0 0 4px;font-size:20px;font-weight:700;color:#1a1a1a">Laitor Admin</h2>
+      <p style="margin:0;font-size:13px;color:#888">Sign in to your workspace</p>
+    </div>
+    <div id="login-error" style="display:none;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;color:#dc2626"></div>
+    <label style="display:block;margin-bottom:6px;font-size:12px;font-weight:600;color:#555">Email or Username</label>
+    <input id="login-email" type="text" placeholder="admin@laitor.co" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:14px;margin-bottom:14px;outline:none;transition:border .2s" onfocus="this.style.borderColor='#006654'" onblur="this.style.borderColor='#e0e0e0'">
+    <label style="display:block;margin-bottom:6px;font-size:12px;font-weight:600;color:#555">Password</label>
+    <input id="login-password" type="password" placeholder="••••••••" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:14px;margin-bottom:20px;outline:none;transition:border .2s" onfocus="this.style.borderColor='#006654'" onblur="this.style.borderColor='#e0e0e0'" onkeydown="if(event.key==='Enter')doLogin()">
+    <button onclick="doLogin()" style="width:100%;padding:12px;background:linear-gradient(135deg,#006654,#00b894);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Sign In</button>
+  </div>
+</div>
 </body>
 </html>

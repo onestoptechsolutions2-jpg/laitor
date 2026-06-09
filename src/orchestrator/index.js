@@ -96,8 +96,7 @@ const logMessage = async ({ phone, direction, text, raw, msgId }) => {
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (msg_id) DO NOTHING`,
       [phone, direction, text, JSON.stringify(raw), msgId]
-    );
-  } catch (err) {
+    );  } catch (err) {
     logger.warn('Message log failed', { error: err.message });
   }
 };
@@ -492,9 +491,7 @@ const process = async (msg) => {
          RETURNING *`,
         [phone, name || null]
       );
-      customer = res.rows[0];
-      // First contact ever — send welcome message before anything else
-      if (!sess.welcomed) {
+      customer = res.rows[0];      if (!sess.welcomed) {
         const cfgStore = require('../services/config-store');
         const welcome  = await cfgStore.get('welcome_message').catch(() => null);
         if (welcome) await whatsapp.sendText(phone, welcome).catch(() => {});

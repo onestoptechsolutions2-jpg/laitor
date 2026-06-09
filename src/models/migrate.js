@@ -364,6 +364,161 @@ CREATE TABLE IF NOT EXISTS mpesa_transactions (
   created_at          TIMESTAMPTZ DEFAULT NOW()
 );
 
+
+/* ════════════════════════════════════════════════════════════════
+   PHASE 1 — CRM PIPELINE
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── Sales pipeline stages ── */
+CREATE TABLE IF NOT EXISTS pipeline_stages (
+  id            SERIAL PRIMARY KEY,
+  name          VARCHAR(100) NOT NULL,
+  slug          VARCHAR(50)  UNIQUE NOT NULL,
+  display_order INT          DEFAULT 0,
+  color         VARCHAR(20)  DEFAULT '#6366f1',
+  is_won        BOOLEAN      DEFAULT false,
+  is_lost       BOOLEAN      DEFAULT false,
+  active        BOOLEAN      DEFAULT true,
+  created_at    TIMESTAMPTZ  DEFAULT NOW()
+);
+
+/* ── Deals / opportunities ── */
+CREATE TABLE IF NOT EXISTS deals (
+  id            SERIAL PRIMARY KEY,
+  title         VARCHAR(255) NOT NULL,
+  customer_id   INT  REFERENCES customers(id),
+  stage_id      INT  REFERENCES pipeline_stages(id),
+  assigned_to   INT  REFERENCES agents(id),
+  value         DECIMAL(10,2) DEFAULT 0,
+  currency      VARCHAR(10)   DEFAULT 'KES',
+  source        VARCHAR(50)   DEFAULT 'whatsapp',
+  priority      VARCHAR(20)   DEFAULT 'medium',
+  expected_close DATE,
+  notes         TEXT,
+  won_at        TIMESTAMPTZ,
+  lost_at       TIMESTAMPTZ,
+  lost_reason   TEXT,
+  created_at    TIMESTAMPTZ   DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ   DEFAULT NOW()
+);
+
+/* ── Customer activity log (calls, notes, WA messages) ── */
+CREATE TABLE IF NOT EXISTS activities (
+  id            SERIAL PRIMARY KEY,
+  customer_id   INT  REFERENCES customers(id),
+  deal_id       INT  REFERENCES deals(id),
+  type          VARCHAR(30)  NOT NULL,  /* note | call | whatsapp | email | meeting */
+  body          TEXT,
+  created_by    VARCHAR(100),           /* agent name or 'system' */
+  created_at    TIMESTAMPTZ  DEFAULT NOW()
+);
+
+/* ── Pipeline indexes ── */
+CREATE INDEX IF NOT EXISTS idx_deals_customer  ON deals(customer_id);
+CREATE INDEX IF NOT EXISTS idx_deals_stage     ON deals(stage_id);
+CREATE INDEX IF NOT EXISTS idx_activities_cust ON activities(customer_id);
+CREATE INDEX IF NOT EXISTS idx_activities_deal ON activities(deal_id);
+
+/* ── Seed default pipeline stages ── */
+INSERT INTO pipeline_stages (name, slug, display_order, color) VALUES
+  ('New Lead',    'new',        1, '#6366f1'),
+  ('Contacted',   'contacted',  2, '#0ea5e9'),
+  ('Qualified',   'qualified',  3, '#f59e0b'),
+  ('Proposal',    'proposal',   4, '#8b5cf6'),
+  ('Negotiation', 'negotiation',5, '#f97316'),
+  ('Won',         'won',        6, '#22c55e'),
+  ('Lost',        'lost',       7, '#ef4444')
+ON CONFLICT (slug) DO NOTHING;
+
+/* ════════════════════════════════════════════════════════════════
+   PHASE 2 — STORE ENHANCEMENTS
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── Product variants (size, colour, etc.) ── */
+CREATE TABLE IF NOT EXISTS product_variants (
+  id           SERIAL PRIMARY KEY,
+  product_id   INT  REFERENCES products(id) ON DELETE CASCADE,
+  sku          VARCHAR(255) UNIQUE,
+  name         VARCHAR(255) NOT NULL,      /* e.g. "Red / XL" */
+  attributes   JSONB  DEFAULT '{}',        /* {color:"Red", size:"XL"} */
+  extra_price  DECIMAL(10,2) DEFAULT 0,    /* added to product price */
+  stock_qty    INT    DEFAULT 0,
+  active       BOOLEAN DEFAULT true,
+  created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+/* ── Add stock_qty to products ── */
+ALTER TABLE products ADD COLUMN IF NOT EXISTS stock_qty     INT DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS track_stock   BOOLEAN DEFAULT false;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS low_stock_qty INT DEFAULT 5;
+
+/* ── Discount / coupon codes ── */
+CREATE TABLE IF NOT EXISTS discount_codes (
+  id              SERIAL PRIMARY KEY,
+  code            VARCHAR(50) UNIQUE NOT NULL,
+  description     VARCHAR(255),
+  type            VARCHAR(20) DEFAULT 'pct',    /* pct | fixed */
+  value           DECIMAL(10,2) NOT NULL,        /* percent or KES amount */
+  min_order_value DECIMAL(10,2) DEFAULT 0,
+  max_uses        INT,
+  used_count      INT DEFAULT 0,
+  applies_to      VARCHAR(20) DEFAULT 'all',     /* all | category | product */
+  target_id       INT,                           /* category_id or product_id */
+  active          BOOLEAN DEFAULT true,
+  expires_at      TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+/* ── Shipping zones ── */
+CREATE TABLE IF NOT EXISTS shipping_zones (
+  id          SERIAL PRIMARY KEY,
+  name        VARCHAR(100) NOT NULL,         /* "Nairobi CBD", "Upcountry", "Int'l" */
+  regions     TEXT[],                        /* list of area names */
+  rate        DECIMAL(10,2) DEFAULT 0,
+  free_above  DECIMAL(10,2),                 /* free shipping if order > this */
+  est_days    VARCHAR(50) DEFAULT '2-3 days',
+  active      BOOLEAN DEFAULT true,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+/* ── Record discount used on order ── */
+ALTER TABLE marketplace_orders ADD COLUMN IF NOT EXISTS discount_code   VARCHAR(50);
+ALTER TABLE marketplace_orders ADD COLUMN IF NOT EXISTS discount_amount DECIMAL(10,2) DEFAULT 0;
+
+/* ── Shipping zone on order ── */
+ALTER TABLE marketplace_orders ADD COLUMN IF NOT EXISTS shipping_zone_id INT;
+ALTER TABLE marketplace_orders ADD COLUMN IF NOT EXISTS shipping_rate    DECIMAL(10,2) DEFAULT 0;
+
+/* ── Store indexes ── */
+CREATE INDEX IF NOT EXISTS idx_variants_product    ON product_variants(product_id);
+CREATE INDEX IF NOT EXISTS idx_discount_code       ON discount_codes(code);
+
+/* ── Seed default shipping zones ── */
+INSERT INTO shipping_zones (name, regions, rate, free_above, est_days) VALUES
+  ('Nairobi CBD',    ARRAY['CBD','Westlands','Kilimani','Lavington'], 200,  5000, '1-2 days'),
+  ('Nairobi Suburbs',ARRAY['Karen','Runda','Gigiri','Muthaiga'],      350,  8000, '1-2 days'),
+  ('Upcountry',      ARRAY['Mombasa','Kisumu','Nakuru','Eldoret'],    500,  10000,'2-4 days'),
+  ('Remote / Rural', ARRAY['Other areas'],                            800,  15000,'3-6 days')
+ON CONFLICT DO NOTHING;
+
+/* ════════════════════════════════════════════════════════════════
+   PHASE 3 — FINANCE
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── Business expenses ── */
+CREATE TABLE IF NOT EXISTS expenses (
+  id          SERIAL PRIMARY KEY,
+  category    VARCHAR(100) NOT NULL,        /* rent, salaries, marketing, etc. */
+  description TEXT,
+  amount      DECIMAL(10,2) NOT NULL,
+  currency    VARCHAR(10)   DEFAULT 'KES',
+  receipt_ref VARCHAR(255),
+  expense_date DATE          DEFAULT CURRENT_DATE,
+  created_at  TIMESTAMPTZ   DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date);
+CREATE INDEX IF NOT EXISTS idx_expenses_cat  ON expenses(category);
 /* ── Marketplace indexes ── */
 CREATE INDEX IF NOT EXISTS idx_products_category   ON products(category_id);
 CREATE INDEX IF NOT EXISTS idx_products_source     ON products(source_id);
@@ -415,6 +570,181 @@ INSERT INTO categories (name, slug, display_order) VALUES
   ('Products & Equipment', 'products',  2),
   ('Technical Support',    'support',   3)
 ON CONFLICT (slug) DO NOTHING;
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- PROSPECTHUB FEATURES — merged into Laitor Engine
+-- Campaigns · Broadcasts · Lead Scoring · Commissions · Deliveries · Suppliers
+-- Admin Auth
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+-- ─── Extend customers with ProspectHub fields ─────────────────────────────────
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS segment      VARCHAR(50)  DEFAULT 'general';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS lead_score   SMALLINT     DEFAULT 0;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS opted_in     BOOLEAN      DEFAULT false;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS opted_out_at TIMESTAMPTZ;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS last_contact TIMESTAMPTZ;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS contact_count INT DEFAULT 0;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS response_count INT DEFAULT 0;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS assigned_agent_id INT REFERENCES agents(id) ON DELETE SET NULL;
+
+-- ─── Extend agents with commission + team ─────────────────────────────────────
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS team            VARCHAR(100);
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS commission_rate NUMERIC(5,2) DEFAULT 5.00;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS monthly_target  NUMERIC(12,2) DEFAULT 0;
+
+-- ─── Lead score log ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lead_score_logs (
+  id            SERIAL PRIMARY KEY,
+  customer_id   INT REFERENCES customers(id) ON DELETE CASCADE NOT NULL,
+  score         SMALLINT NOT NULL,
+  factors       JSONB NOT NULL DEFAULT '{}',
+  scored_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_lsl_customer ON lead_score_logs(customer_id);
+
+-- ─── Campaigns ─────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS campaigns (
+  id                SERIAL PRIMARY KEY,
+  name              VARCHAR(255) NOT NULL,
+  channel           VARCHAR(20)  NOT NULL DEFAULT 'whatsapp' CHECK (channel IN ('whatsapp','sms','email')),
+  message_template  TEXT         NOT NULL,
+  segment_filter    JSONB        NOT NULL DEFAULT '{}',
+  -- segment_filter: { segments:[], locations:[], min_score:0, opted_in_only:true, status:[] }
+  status            VARCHAR(20)  NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','scheduled','running','completed','paused')),
+  total_recipients  INT          NOT NULL DEFAULT 0,
+  sent_count        INT          NOT NULL DEFAULT 0,
+  response_count    INT          NOT NULL DEFAULT 0,
+  created_by        INT REFERENCES agents(id) ON DELETE SET NULL,
+  scheduled_at      TIMESTAMPTZ,
+  completed_at      TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- ─── Broadcasts (executed sends) ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS broadcasts (
+  id           SERIAL PRIMARY KEY,
+  campaign_id  INT REFERENCES campaigns(id) ON DELETE CASCADE NOT NULL,
+  status       VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','completed','failed')),
+  sent_count   INT NOT NULL DEFAULT 0,
+  failed_count INT NOT NULL DEFAULT 0,
+  started_at   TIMESTAMPTZ,
+  finished_at  TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS broadcast_recipients (
+  id            SERIAL PRIMARY KEY,
+  broadcast_id  INT REFERENCES broadcasts(id) ON DELETE CASCADE NOT NULL,
+  customer_id   INT REFERENCES customers(id) ON DELETE CASCADE NOT NULL,
+  phone         VARCHAR(30) NOT NULL,
+  status        VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','failed','replied')),
+  sent_at       TIMESTAMPTZ,
+  error         TEXT,
+  UNIQUE (broadcast_id, customer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_br_broadcast  ON broadcast_recipients(broadcast_id);
+CREATE INDEX IF NOT EXISTS idx_br_customer   ON broadcast_recipients(customer_id);
+
+-- ─── Commission rates ──────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS commission_rates (
+  id           SERIAL PRIMARY KEY,
+  category_id  INT REFERENCES categories(id) ON DELETE SET NULL,
+  product_name VARCHAR(255),
+  rate_pct     NUMERIC(5,2) NOT NULL DEFAULT 5.00,
+  flat_amount  NUMERIC(10,2),
+  active       BOOLEAN NOT NULL DEFAULT true
+);
+
+-- ─── Commissions earned ────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS commissions (
+  id           SERIAL PRIMARY KEY,
+  agent_id     INT REFERENCES agents(id) ON DELETE CASCADE NOT NULL,
+  customer_id  INT REFERENCES customers(id) ON DELETE SET NULL,
+  order_id     INT REFERENCES marketplace_orders(id) ON DELETE SET NULL,
+  invoice_id   INT REFERENCES invoices(id) ON DELETE SET NULL,
+  description  TEXT,
+  sale_amount  NUMERIC(12,2) NOT NULL DEFAULT 0,
+  rate_pct     NUMERIC(5,2)  NOT NULL DEFAULT 5.00,
+  commission   NUMERIC(12,2) NOT NULL DEFAULT 0,
+  status       VARCHAR(20)   NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','paid')),
+  period       VARCHAR(7),  -- 'YYYY-MM'
+  paid_at      TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_comm_agent  ON commissions(agent_id);
+CREATE INDEX IF NOT EXISTS idx_comm_period ON commissions(period);
+
+-- ─── Suppliers ─────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS suppliers (
+  id             SERIAL PRIMARY KEY,
+  name           VARCHAR(255) NOT NULL,
+  contact_name   VARCHAR(255),
+  phone          VARCHAR(30),
+  email          VARCHAR(255),
+  location       VARCHAR(255),
+  category       VARCHAR(100),
+  payment_terms  VARCHAR(100),
+  lead_time_days INT DEFAULT 3,
+  notes          TEXT,
+  active         BOOLEAN NOT NULL DEFAULT true,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Link supplier to marketplace products
+ALTER TABLE products ADD COLUMN IF NOT EXISTS supplier_id INT REFERENCES suppliers(id) ON DELETE SET NULL;
+
+-- ─── Delivery jobs ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS delivery_jobs (
+  id              SERIAL PRIMARY KEY,
+  order_id        INT REFERENCES marketplace_orders(id) ON DELETE SET NULL,
+  customer_id     INT REFERENCES customers(id) ON DELETE SET NULL,
+  rider_name      VARCHAR(255),
+  rider_phone     VARCHAR(30),
+  pickup_address  TEXT,
+  delivery_address TEXT NOT NULL,
+  status          VARCHAR(20) NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending','picked_up','in_transit','delivered','failed','cancelled')),
+  estimated_at    TIMESTAMPTZ,
+  delivered_at    TIMESTAMPTZ,
+  notes           TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_dj_order    ON delivery_jobs(order_id);
+CREATE INDEX IF NOT EXISTS idx_dj_status   ON delivery_jobs(status);
+
+CREATE TABLE IF NOT EXISTS delivery_events (
+  id           SERIAL PRIMARY KEY,
+  job_id       INT REFERENCES delivery_jobs(id) ON DELETE CASCADE NOT NULL,
+  status       VARCHAR(20) NOT NULL,
+  notes        TEXT,
+  location     TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ─── Admin users (local auth — no Supabase) ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS admin_users (
+  id            SERIAL PRIMARY KEY,
+  username      VARCHAR(100) UNIQUE NOT NULL,
+  email         VARCHAR(255) UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  role          VARCHAR(20) NOT NULL DEFAULT 'agent' CHECK (role IN ('admin','manager','agent')),
+  agent_id      INT REFERENCES agents(id) ON DELETE SET NULL,
+  active        BOOLEAN NOT NULL DEFAULT true,
+  last_login    TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ─── Outreach config ───────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS outreach_config (
+  id             SERIAL PRIMARY KEY,
+  max_per_day    INT NOT NULL DEFAULT 500,
+  send_start_hr  INT NOT NULL DEFAULT 8,
+  send_end_hr    INT NOT NULL DEFAULT 20,
+  delay_ms       INT NOT NULL DEFAULT 1500,  -- between sends
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+INSERT INTO outreach_config (id) VALUES (1) ON CONFLICT DO NOTHING;
+
 `;
 
 (async () => {

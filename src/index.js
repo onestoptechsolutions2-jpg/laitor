@@ -28,6 +28,7 @@ const webhookRouter  = require('./routes/webhook');
 const contactsRouter = require('./routes/contacts');
 const webLeadRouter  = require('./routes/weblead');
 const apiRouter      = require('./routes/api');
+const { router: authRouter } = require('./routes/auth');
 
 const app = express();
 
@@ -63,6 +64,7 @@ app.get('/admin', (_req, res) => {
 app.use('/webhook/whatsapp', webhookRouter);
 app.use('/contacts',         contactsRouter);
 app.use('/leads',            webLeadRouter);
+app.use('/auth',             authRouter);
 app.use('/api/v1',           apiRouter);
 
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));

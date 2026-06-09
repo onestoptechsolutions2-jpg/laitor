@@ -979,5 +979,196 @@ router.get('/marketplace/reports/sources', async (req, res) => {
     res.json({ data });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// ═══════════════════════════════════════════════════════════════════════════════
+// PROSPECTHUB FEATURES — campaigns, broadcasts, leads, commissions, deliveries, suppliers
+// ═══════════════════════════════════════════════════════════════════════════════
+const campaign   = require('../services/campaign');
+const leads      = require('../services/leads');
+const commission = require('../services/commission');
+const delivery   = require('../services/delivery');
+const supplier   = require('../services/supplier');
+
+// ── Campaigns ────────────────────────────────────────────────────────────────
+router.get('/campaigns', async (req, res) => {
+  try { res.json({ campaigns: await campaign.list(req.query) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/campaigns', async (req, res) => {
+  try {
+    const c = await campaign.create({
+      name:            req.body.name,
+      channel:         req.body.channel,
+      messageTemplate: req.body.message_template,
+      segmentFilter:   req.body.segment_filter || {},
+      scheduledAt:     req.body.scheduled_at,
+      createdBy:       req.body.created_by,
+    });
+    res.json({ campaign: c });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/campaigns/:id', async (req, res) => {
+  try { res.json({ campaign: await campaign.update(req.params.id, req.body) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/campaigns/:id/launch', async (req, res) => {
+  try { res.json(await campaign.launch(req.params.id)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/campaigns/preview', async (req, res) => {
+  try {
+    const recipients = await campaign.buildRecipients(req.body.segment_filter || {});
+    res.json({ count: recipients.length, sample: recipients.slice(0, 5) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Broadcasts ───────────────────────────────────────────────────────────────
+router.get('/broadcasts', async (req, res) => {
+  try {
+    const limit  = parseInt(req.query.limit) || 30;
+    const offset = (parseInt(req.query.page) - 1 || 0) * limit;
+    const { rows } = await db.query(`
+      SELECT b.*, c.name AS campaign_name,
+             (SELECT COUNT(*) FROM broadcast_recipients br WHERE br.broadcast_id=b.id AND br.status='sent') AS delivered
+      FROM broadcasts b LEFT JOIN campaigns c ON c.id=b.campaign_id
+      ORDER BY b.created_at DESC LIMIT $1 OFFSET $2
+    `, [limit, offset]);
+    res.json({ broadcasts: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/broadcasts/:id/recipients', async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT br.*, cu.name AS customer_name FROM broadcast_recipients br
+       LEFT JOIN customers cu ON cu.id=br.customer_id
+       WHERE br.broadcast_id=$1 ORDER BY br.sent_at DESC NULLS LAST LIMIT 200`,
+      [req.params.id]
+    );
+    res.json({ recipients: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Lead scoring ─────────────────────────────────────────────────────────────
+router.post('/leads/score', async (req, res) => {
+  try {
+    if (req.body.customer_id) {
+      const result = await leads.scoreCustomer(req.body.customer_id);
+      res.json({ result });
+    } else {
+      // async full score — respond immediately
+      res.json({ message: 'Scoring started' });
+      leads.scoreAll({ onlyStale: req.body.only_stale !== false }).catch(() => {});
+    }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Commissions ──────────────────────────────────────────────────────────────
+router.get('/commissions', async (req, res) => {
+  try { res.json({ commissions: await commission.list(req.query) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/commissions/summary/:agentId', async (req, res) => {
+  try { res.json(await commission.summary(req.params.agentId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/commissions', async (req, res) => {
+  try { res.json({ commission: await commission.create(req.body) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/commissions/:id/approve', async (req, res) => {
+  try { res.json({ commission: await commission.approve(req.params.id) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/commissions/pay', async (req, res) => {
+  try { res.json({ paid: await commission.markPaid(req.body.ids) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Deliveries ───────────────────────────────────────────────────────────────
+router.get('/deliveries', async (req, res) => {
+  try { res.json({ deliveries: await delivery.list(req.query) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/deliveries', async (req, res) => {
+  try { res.json({ delivery: await delivery.create(req.body) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/deliveries/:id/status', async (req, res) => {
+  try { res.json({ delivery: await delivery.updateStatus(req.params.id, req.body.status, req.body) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/deliveries/:id/events', async (req, res) => {
+  try { res.json({ events: await delivery.events(req.params.id) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Suppliers ────────────────────────────────────────────────────────────────
+router.get('/suppliers', async (req, res) => {
+  try { res.json({ suppliers: await supplier.list(req.query) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/suppliers', async (req, res) => {
+  try { res.json({ supplier: await supplier.upsert(req.body) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/suppliers/:id', async (req, res) => {
+  try { res.json({ supplier: await supplier.upsert({ ...req.body, id: req.params.id }) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/suppliers/:id', async (req, res) => {
+  try { await supplier.remove(req.params.id); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Customers: bulk CSV import ───────────────────────────────────────────────
+router.post('/customers/import', async (req, res) => {
+  try {
+    const rows   = req.body.rows || [];   // [{ phone, name, location, segment, email }]
+    let imported = 0, skipped = 0;
+    for (const r of rows) {
+      if (!r.phone) { skipped++; continue; }
+      let phone = String(r.phone).replace(/[\s\-().]/g, '');
+      if (/^0[17]\d{8}$/.test(phone)) phone = '254' + phone.slice(1);
+      if (/^254\d{9}$/.test(phone))   phone = phone;
+      await db.query(
+        `INSERT INTO customers (phone, name, location, segment, source, consent_status, opted_in)
+         VALUES ($1,$2,$3,$4,'import','pending',false)
+         ON CONFLICT (phone) DO UPDATE SET
+           name=COALESCE(EXCLUDED.name,customers.name),
+           location=COALESCE(EXCLUDED.location,customers.location),
+           segment=COALESCE(EXCLUDED.segment,customers.segment)`,
+        [phone, r.name||null, r.location||null, r.segment||'general']
+      );
+      imported++;
+    }
+    res.json({ imported, skipped, total: rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Customers: update segment / opt-in ───────────────────────────────────────
+router.put('/customers/:id/segment', async (req, res) => {
+  try {
+    const { segment, opted_in } = req.body;
+    const { rows } = await db.query(
+      `UPDATE customers SET segment=COALESCE($1,segment), opted_in=COALESCE($2,opted_in) WHERE id=$3 RETURNING *`,
+      [segment||null, opted_in??null, req.params.id]
+    );
+    res.json({ customer: rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 module.exports = router;
