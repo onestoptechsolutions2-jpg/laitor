@@ -896,6 +896,233 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
       </div>
     </section>
 
+    <button class="nav-link" onclick="nav('mkt-products',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+      Products
+    </button>
+    <button class="nav-link" onclick="nav('mkt-orders',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="1"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+      Mkt Orders
+    </button>
+    <button class="nav-link" onclick="nav('mkt-reports',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      Reports
+    </button>
+    <button class="nav-link" onclick="nav('mkt-sources',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+      Sources
+    </button>
+    <!-- ════════ MARKETPLACE: PRODUCTS ════════ -->
+    <section id="mkt-products" class="section">
+      <div class="topbar">
+        <div class="topbar-left"><button class="hamburger" onclick="openSidebar()">☰</button><h1>Products</h1></div>
+        <div class="topbar-actions">
+          <select id="mkt-cat-filter" class="form-control" style="width:150px;font-size:13px" onchange="loadMktProducts()">
+            <option value="">All categories</option>
+          </select>
+          <button class="btn btn-outline btn-sm" onclick="toggleForm('mkt-csv-form')">📤 Import CSV</button>
+          <button class="btn btn-primary btn-sm" onclick="toggleForm('mkt-prod-form')">+ Add Product</button>
+        </div>
+      </div>
+      <div class="content">
+
+        <!-- CSV import form -->
+        <div id="mkt-csv-form" class="card" style="display:none;margin-bottom:16px">
+          <div class="card-header"><strong>Import Products via CSV</strong></div>
+          <div class="card-body">
+            <p style="font-size:13px;color:var(--muted);margin-bottom:8px">Required columns: <code>name, cost_price, category_slug</code>. Optional: <code>description, sell_price, image_url, supplier_url, shipping_info, stock_status, sku</code></p>
+            <textarea id="mkt-csv-text" class="form-control" rows="6" placeholder="name,cost_price,category_slug,description&#10;iPhone 15 Pro,142000,electronics,Flagship Apple phone"></textarea>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn btn-primary" onclick="importCsv()">Import</button>
+              <button class="btn btn-outline" onclick="toggleForm('mkt-csv-form')">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add product form -->
+        <div id="mkt-prod-form" class="card" style="display:none;margin-bottom:16px">
+          <div class="card-header"><strong>Add Product</strong></div>
+          <div class="card-body">
+            <div class="form-row">
+              <div class="form-group" style="flex:2"><label class="form-label">Product Name *</label><input id="pf-name" class="form-control" placeholder="e.g. Samsung Galaxy A55"></div>
+              <div class="form-group" style="flex:1">
+                <label class="form-label">Category</label>
+                <select id="pf-cat" class="form-control"></select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group" style="flex:1"><label class="form-label">Cost Price (KES)</label><input id="pf-cost" type="number" class="form-control" placeholder="0"></div>
+              <div class="form-group" style="flex:1"><label class="form-label">Markup % (blank=category default)</label><input id="pf-markup" type="number" class="form-control" placeholder="auto"></div>
+              <div class="form-group" style="flex:1"><label class="form-label">Fixed Sell Price (overrides markup)</label><input id="pf-sell" type="number" class="form-control" placeholder="optional"></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group" style="flex:2"><label class="form-label">Image URL</label><input id="pf-img" class="form-control" placeholder="https://..."></div>
+              <div class="form-group" style="flex:2"><label class="form-label">Supplier URL</label><input id="pf-url" class="form-control" placeholder="https://jumia.co.ke/..."></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group" style="flex:2"><label class="form-label">Shipping Info</label><input id="pf-ship" class="form-control" placeholder="Ships via Jumia (1-3 days)"></div>
+              <div class="form-group" style="flex:1">
+                <label class="form-label">Stock Status</label>
+                <select id="pf-stock" class="form-control"><option value="in_stock">In Stock</option><option value="out_of_stock">Out of Stock</option></select>
+              </div>
+              <div class="form-group" style="flex:0 0 100px;padding-top:28px">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+                  <input id="pf-featured" type="checkbox"> Featured
+                </label>
+              </div>
+            </div>
+            <div class="form-group"><label class="form-label">Description</label><textarea id="pf-desc" class="form-control" rows="2"></textarea></div>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn btn-primary" onclick="saveProduct()">Save Product</button>
+              <button class="btn btn-outline" onclick="toggleForm('mkt-prod-form')">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Product table -->
+        <div class="card">
+          <div style="overflow-x:auto">
+            <table class="table">
+              <thead><tr><th>Product</th><th>Category</th><th>Cost</th><th>Sell Price</th><th>Stock</th><th>Featured</th><th>Actions</th></tr></thead>
+              <tbody id="mkt-prod-body"><tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted)">Loading…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ════════ MARKETPLACE: ORDERS ════════ -->
+    <section id="mkt-orders" class="section">
+      <div class="topbar">
+        <div class="topbar-left"><button class="hamburger" onclick="openSidebar()">☰</button><h1>Marketplace Orders</h1></div>
+        <div class="topbar-actions">
+          <select id="mkt-ord-status" class="form-control" style="width:140px;font-size:13px" onchange="loadMktOrders()">
+            <option value="">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="confirmed">Confirmed</option>
+            <option value="processing">Processing</option>
+            <option value="shipped">Shipped</option>
+            <option value="delivered">Delivered</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+      </div>
+      <div class="content">
+        <div class="card">
+          <div style="overflow-x:auto">
+            <table class="table">
+              <thead><tr><th>Order #</th><th>Customer</th><th>Items</th><th>Total</th><th>Payment</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+              <tbody id="mkt-ord-body"><tr><td colspan="8" style="text-align:center;padding:32px;color:var(--muted)">Loading…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ════════ MARKETPLACE: REPORTS ════════ -->
+    <section id="mkt-reports" class="section">
+      <div class="topbar">
+        <div class="topbar-left"><button class="hamburger" onclick="openSidebar()">☰</button><h1>Sales Reports</h1></div>
+        <div class="topbar-actions">
+          <input id="rpt-from" type="date" class="form-control" style="font-size:13px;width:140px">
+          <input id="rpt-to"   type="date" class="form-control" style="font-size:13px;width:140px">
+          <button class="btn btn-primary btn-sm" onclick="loadMktReports()">Apply</button>
+        </div>
+      </div>
+      <div class="content">
+        <!-- KPI cards -->
+        <div class="stats-grid" id="rpt-kpis" style="margin-bottom:16px">
+          <div class="stat-card"><div class="stat-label">Total Revenue</div><div class="stat-value" id="rpt-revenue">—</div></div>
+          <div class="stat-card"><div class="stat-label">Total Orders</div><div class="stat-value" id="rpt-orders">—</div></div>
+          <div class="stat-card"><div class="stat-label">Avg Order Value</div><div class="stat-value" id="rpt-aov">—</div></div>
+          <div class="stat-card"><div class="stat-label">Gross Margin</div><div class="stat-value" id="rpt-margin">—</div></div>
+        </div>
+        <!-- Revenue chart -->
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-header"><strong>Daily Revenue</strong></div>
+          <div class="card-body"><canvas id="rpt-daily-chart" height="80"></canvas></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+          <!-- Top products -->
+          <div class="card">
+            <div class="card-header"><strong>Top Products</strong></div>
+            <div class="card-body" style="padding:0">
+              <table class="table" style="margin:0">
+                <thead><tr><th>Product</th><th>Units</th><th>Revenue</th></tr></thead>
+                <tbody id="rpt-top-products"></tbody>
+              </table>
+            </div>
+          </div>
+          <!-- Top customers -->
+          <div class="card">
+            <div class="card-header"><strong>Top Customers</strong></div>
+            <div class="card-body" style="padding:0">
+              <table class="table" style="margin:0">
+                <thead><tr><th>Customer</th><th>Orders</th><th>Spent</th></tr></thead>
+                <tbody id="rpt-top-customers"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <!-- Payment methods -->
+        <div class="card">
+          <div class="card-header"><strong>Payment Methods</strong></div>
+          <div class="card-body"><table class="table" style="margin:0">
+            <thead><tr><th>Method</th><th>Orders</th><th>Total Value</th><th>Collected</th></tr></thead>
+            <tbody id="rpt-pay-methods"></tbody>
+          </table></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ════════ MARKETPLACE: SOURCES ════════ -->
+    <section id="mkt-sources" class="section">
+      <div class="topbar">
+        <div class="topbar-left"><button class="hamburger" onclick="openSidebar()">☰</button><h1>Product Sources</h1></div>
+        <div class="topbar-actions">
+          <button class="btn btn-outline btn-sm" onclick="syncAllSources()">↺ Sync All</button>
+          <button class="btn btn-primary btn-sm" onclick="toggleForm('src-form')">+ Add Source</button>
+        </div>
+      </div>
+      <div class="content">
+        <div id="src-form" class="card" style="display:none;margin-bottom:16px">
+          <div class="card-header"><strong>Add Product Source</strong></div>
+          <div class="card-body">
+            <div class="form-row">
+              <div class="form-group" style="flex:2"><label class="form-label">Source Name *</label><input id="src-name" class="form-control" placeholder="Jumia Kenya"></div>
+              <div class="form-group" style="flex:1">
+                <label class="form-label">Type *</label>
+                <select id="src-type" class="form-control" onchange="showSourceConfigHint()">
+                  <option value="manual">Manual Entry</option>
+                  <option value="csv">CSV Import</option>
+                  <option value="jumia">Jumia Kenya</option>
+                  <option value="aliexpress">AliExpress</option>
+                  <option value="amazon">Amazon</option>
+                  <option value="custom_api">Custom API</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Config (JSON) <span id="src-cfg-hint" style="color:var(--muted);font-size:12px"></span></label>
+              <textarea id="src-config" class="form-control" rows="4" placeholder="{}"></textarea>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn btn-primary" onclick="saveSource()">Save Source</button>
+              <button class="btn btn-outline" onclick="toggleForm('src-form')">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div style="overflow-x:auto">
+            <table class="table">
+              <thead><tr><th>Source</th><th>Type</th><th>Status</th><th>Products</th><th>Last Sync</th><th>Actions</th></tr></thead>
+              <tbody id="src-body"><tr><td colspan="6" style="text-align:center;padding:32px;color:var(--muted)">Loading…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- ════════ TICKETS ════════ -->
     <section id="tickets" class="section">
       <div class="topbar">
@@ -1277,6 +1504,10 @@ function nav(id, el) {
     contacts:   loadContacts,
     orders:     loadOrders,
     invoices:   loadInvoices,
+    "mkt-products": loadMktProducts,
+    "mkt-orders":   loadMktOrders,
+    "mkt-reports":  loadMktReports,
+    "mkt-sources":  loadMktSources,
     tickets:    loadTickets,
     quotes:     loadQuotes,
     outreach:   loadPending,
@@ -1836,6 +2067,331 @@ async function deleteMenuItem(id) {
   await fetch(API + '/api/v1/content/menu-items/' + id, { method: 'DELETE' });
   loadMenuItems(); toast('Deleted');
 }
+
+// ── Marketplace: Products ─────────────────────────────────────────────────────
+
+let _mktCats = [];
+
+async function loadMktCategories() {
+  try {
+    const d = await fetch(API + '/api/v1/marketplace/categories').then(r => r.json());
+    _mktCats = d.categories || [];
+    const filterSel = document.getElementById('mkt-cat-filter');
+    const pfCat     = document.getElementById('pf-cat');
+    if (filterSel) {
+      filterSel.innerHTML = '<option value="">All categories</option>' +
+        _mktCats.map(c => `<option value="${c.id}">${c.icon} ${c.name}</option>`).join('');
+    }
+    if (pfCat) {
+      pfCat.innerHTML = '<option value="">— None —</option>' +
+        _mktCats.map(c => `<option value="${c.id}">${c.icon} ${c.name}</option>`).join('');
+    }
+  } catch(e) {}
+}
+
+async function loadMktProducts() {
+  await loadMktCategories();
+  const catId = document.getElementById('mkt-cat-filter')?.value || '';
+  try {
+    const params = new URLSearchParams({ limit: 50, include_inactive: 'true' });
+    if (catId) params.set('category_id', catId);
+    const d = await fetch(API + '/api/v1/marketplace/products?' + params).then(r => r.json());
+    const tbody = document.getElementById('mkt-prod-body');
+    if (!d.products?.length) {
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted)">No products yet. Add one or import via CSV.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.products.map(p => `<tr>
+      <td>
+        ${p.image_url ? `<img src="${p.image_url}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;margin-right:8px;vertical-align:middle">` : ''}
+        <span style="font-weight:600">${p.name}</span>
+        ${p.supplier_url ? `<a href="${p.supplier_url}" target="_blank" style="color:var(--muted);font-size:11px;display:block">🔗 Supplier</a>` : ''}
+      </td>
+      <td>${p.category_icon||'📦'} ${p.category_name||'—'}</td>
+      <td>KES ${parseFloat(p.cost_price||0).toLocaleString()}</td>
+      <td style="font-weight:600;color:var(--green)">KES ${parseFloat(p.computed_price||0).toLocaleString()}</td>
+      <td><span class="badge badge-${p.stock_status==='in_stock'?'green':'red'}">${p.stock_status}</span></td>
+      <td style="text-align:center">${p.featured ? '⭐' : ''}</td>
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="toggleProductActive(${p.id},${!p.active})">${p.active?'Deactivate':'Activate'}</button>
+      </td>
+    </tr>`).join('');
+  } catch(e) { console.error('loadMktProducts', e); }
+}
+
+async function saveProduct() {
+  const body = {
+    name:         document.getElementById('pf-name').value.trim(),
+    category_id:  parseInt(document.getElementById('pf-cat').value) || null,
+    cost_price:   parseFloat(document.getElementById('pf-cost').value) || 0,
+    markup_pct:   document.getElementById('pf-markup').value ? parseFloat(document.getElementById('pf-markup').value) : null,
+    sell_price:   document.getElementById('pf-sell').value   ? parseFloat(document.getElementById('pf-sell').value)   : null,
+    image_url:    document.getElementById('pf-img').value.trim()  || null,
+    supplier_url: document.getElementById('pf-url').value.trim()  || null,
+    shipping_info:document.getElementById('pf-ship').value.trim() || null,
+    stock_status: document.getElementById('pf-stock').value,
+    featured:     document.getElementById('pf-featured').checked,
+    description:  document.getElementById('pf-desc').value.trim() || null,
+  };
+  if (!body.name) { toast('Product name is required', true); return; }
+  try {
+    const d = await fetch(API + '/api/v1/marketplace/products', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+    }).then(r => r.json());
+    if (d.error) { toast('Error: ' + d.error, true); return; }
+    toast('Product saved');
+    toggleForm('mkt-prod-form');
+    loadMktProducts();
+  } catch(e) { toast('Failed: ' + e.message, true); }
+}
+
+async function toggleProductActive(id, active) {
+  try {
+    await fetch(API + '/api/v1/marketplace/products/' + id, {
+      method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ active }),
+    });
+    loadMktProducts();
+  } catch(e) { toast('Failed', true); }
+}
+
+async function importCsv() {
+  const csvText = document.getElementById('mkt-csv-text').value.trim();
+  if (!csvText) { toast('Paste CSV data first', true); return; }
+  try {
+    const d = await fetch(API + '/api/v1/marketplace/products/import-csv', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ csvText }),
+    }).then(r => r.json());
+    if (d.error) { toast('Error: ' + d.error, true); return; }
+    toast(`Imported: ${d.stats.inserted} new, ${d.stats.updated} updated`);
+    toggleForm('mkt-csv-form');
+    loadMktProducts();
+  } catch(e) { toast('Failed: ' + e.message, true); }
+}
+
+// ── Marketplace: Orders ───────────────────────────────────────────────────────
+
+async function loadMktOrders() {
+  const status = document.getElementById('mkt-ord-status')?.value || '';
+  try {
+    const params = new URLSearchParams({ limit: 50 });
+    if (status) params.set('status', status);
+    const d = await fetch(API + '/api/v1/marketplace/orders?' + params).then(r => r.json());
+    const tbody = document.getElementById('mkt-ord-body');
+    if (!d.orders?.length) {
+      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--muted)">No orders yet</td></tr>';
+      return;
+    }
+    const statusColor = { pending:'yellow', confirmed:'blue', processing:'blue', shipped:'blue', delivered:'green', cancelled:'red' };
+    const payColor    = { unpaid:'red', partial:'yellow', paid:'green', refunded:'grey' };
+    tbody.innerHTML = d.orders.map(o => `<tr>
+      <td style="font-weight:600">${o.order_number}</td>
+      <td>${o.customer_name||'—'}<br><small style="color:var(--muted)">${o.phone}</small></td>
+      <td style="font-size:12px">${o.delivery_address?.substring(0,40)||'—'}</td>
+      <td style="font-weight:600">KES ${parseFloat(o.total||0).toLocaleString()}</td>
+      <td>
+        <span class="badge badge-${payColor[o.payment_status]||'grey'}">${o.payment_status}</span>
+        <div style="font-size:11px;color:var(--muted)">${o.payment_method}</div>
+      </td>
+      <td><span class="badge badge-${statusColor[o.status]||'grey'}">${o.status}</span></td>
+      <td style="font-size:12px;color:var(--muted)">${new Date(o.created_at).toLocaleDateString()}</td>
+      <td style="white-space:nowrap">
+        ${o.status==='confirmed'||o.status==='processing' ? `<button class="btn btn-outline btn-sm" onclick="dispatchOrder(${o.id})">📦 Dispatch</button>` : ''}
+        ${o.status==='shipped' ? `<button class="btn btn-outline btn-sm" onclick="deliverOrder(${o.id})">✅ Delivered</button>` : ''}
+        ${o.payment_status==='unpaid'||o.payment_status==='partial' ? `<button class="btn btn-outline btn-sm" onclick="confirmPayment(${o.id},${o.total})">💳 Confirm Pay</button>` : ''}
+      </td>
+    </tr>`).join('');
+  } catch(e) { console.error('loadMktOrders', e); }
+}
+
+async function dispatchOrder(id) {
+  const tracking = prompt('Tracking info (optional):') || '';
+  try {
+    await fetch(API + '/api/v1/marketplace/orders/' + id + '/dispatch', {
+      method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ tracking_info: tracking }),
+    });
+    toast('Marked as dispatched'); loadMktOrders();
+  } catch(e) { toast('Failed', true); }
+}
+
+async function deliverOrder(id) {
+  try {
+    await fetch(API + '/api/v1/marketplace/orders/' + id + '/deliver', { method: 'PUT' });
+    toast('Marked as delivered'); loadMktOrders();
+  } catch(e) { toast('Failed', true); }
+}
+
+async function confirmPayment(id, total) {
+  const ref = prompt('M-Pesa receipt or reference:') || 'MANUAL';
+  try {
+    await fetch(API + '/api/v1/marketplace/orders/' + id + '/confirm-payment', {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ amount: total, reference: ref }),
+    });
+    toast('Payment confirmed'); loadMktOrders();
+  } catch(e) { toast('Failed', true); }
+}
+
+// ── Reports ───────────────────────────────────────────────────────────────────
+
+let _dailyChart = null;
+
+async function loadMktReports() {
+  const from = document.getElementById('rpt-from')?.value || '';
+  const to   = document.getElementById('rpt-to')?.value   || '';
+  try {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from + 'T00:00:00Z');
+    if (to)   params.set('to',   to   + 'T23:59:59Z');
+
+    const [rSummary, rDaily, rProducts, rCustomers, rPay] = await Promise.all([
+      fetch(API + '/api/v1/marketplace/reports/summary?' + params).then(r => r.json()),
+      fetch(API + '/api/v1/marketplace/reports/daily?'   + params).then(r => r.json()),
+      fetch(API + '/api/v1/marketplace/reports/products?'+ params).then(r => r.json()),
+      fetch(API + '/api/v1/marketplace/reports/customers?'+ params).then(r => r.json()),
+      fetch(API + '/api/v1/marketplace/reports/categories?'+ params).then(r => r.json()),
+    ]);
+
+    const s = rSummary.summary || {};
+    const p = rSummary.profit  || {};
+
+    const fmt = (v) => 'KES ' + parseFloat(v||0).toLocaleString('en-KE', {minimumFractionDigits:0});
+    document.getElementById('rpt-revenue').textContent = fmt(s.total_revenue);
+    document.getElementById('rpt-orders').textContent  = s.total_orders || '0';
+    document.getElementById('rpt-aov').textContent     = fmt(s.avg_order_value);
+    document.getElementById('rpt-margin').textContent  = (parseFloat(p.margin_pct||0).toFixed(1)) + '%';
+
+    // Daily chart
+    const daily = rDaily.data || [];
+    const labels  = daily.map(d => d.date?.split('T')[0] || d.date);
+    const revenue = daily.map(d => parseFloat(d.revenue||0));
+    const canvas  = document.getElementById('rpt-daily-chart');
+    if (canvas && window.Chart) {
+      if (_dailyChart) _dailyChart.destroy();
+      _dailyChart = new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{ label: 'Revenue (KES)', data: revenue,
+            backgroundColor: 'rgba(99,102,241,0.7)', borderRadius: 4 }],
+        },
+        options: { responsive: true, plugins: { legend: { display: false } },
+          scales: { y: { ticks: { callback: v => 'KES ' + v.toLocaleString() } } } },
+      });
+    }
+
+    // Top products
+    document.getElementById('rpt-top-products').innerHTML = (rProducts.data||[]).map(p =>
+      `<tr><td style="font-size:13px">${p.product_name}</td><td>${p.units_sold}</td><td>KES ${parseFloat(p.revenue||0).toLocaleString()}</td></tr>`
+    ).join('') || '<tr><td colspan="3" style="color:var(--muted);text-align:center;padding:16px">No data</td></tr>';
+
+    // Top customers
+    document.getElementById('rpt-top-customers').innerHTML = (rCustomers.data||[]).map(c =>
+      `<tr><td style="font-size:13px">${c.name||c.phone}</td><td>${c.order_count}</td><td>KES ${parseFloat(c.total_spent||0).toLocaleString()}</td></tr>`
+    ).join('') || '<tr><td colspan="3" style="color:var(--muted);text-align:center;padding:16px">No data</td></tr>';
+
+    // Payment methods
+    document.getElementById('rpt-pay-methods').innerHTML = (rSummary.paymentMethods||[]).map(m =>
+      `<tr><td>${m.payment_method}</td><td>${m.count}</td><td>KES ${parseFloat(m.total_value||0).toLocaleString()}</td><td>KES ${parseFloat(m.collected||0).toLocaleString()}</td></tr>`
+    ).join('') || '<tr><td colspan="4" style="color:var(--muted);text-align:center;padding:16px">No data</td></tr>';
+  } catch(e) { console.error('loadMktReports', e); }
+}
+
+// ── Sources ───────────────────────────────────────────────────────────────────
+
+const SOURCE_CONFIG_HINTS = {
+  jumia:      '{"keywords":["electronics","phones"],"max_pages":3,"category_id":1}',
+  aliexpress: '{"app_key":"YOUR_KEY","keywords":["electronics"],"category_id":1,"max_items":20}',
+  amazon:     '{"access_key":"","secret_key":"","partner_tag":"","keywords":["electronics"]}',
+  custom_api: '{"url":"https://api.example.com/products","items_path":"data","field_map":{"name":"title","cost_price":"price"}}',
+  csv:        '{}',
+  manual:     '{}',
+};
+
+function showSourceConfigHint() {
+  const type = document.getElementById('src-type').value;
+  const hint = SOURCE_CONFIG_HINTS[type] || '{}';
+  document.getElementById('src-cfg-hint').textContent = '— example shown below';
+  document.getElementById('src-config').placeholder = hint;
+}
+
+async function loadMktSources() {
+  try {
+    const d = await fetch(API + '/api/v1/marketplace/sources').then(r => r.json());
+    const tbody = document.getElementById('src-body');
+    if (!d.sources?.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--muted)">No sources configured</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.sources.map(s => `<tr>
+      <td style="font-weight:600">${s.name}</td>
+      <td><span class="badge badge-grey">${s.type}</span></td>
+      <td><span class="badge badge-${s.active?'green':'red'}">${s.active?'Active':'Inactive'}</span></td>
+      <td>—</td>
+      <td style="font-size:12px;color:var(--muted)">${s.last_sync ? new Date(s.last_sync).toLocaleString() : 'Never'}</td>
+      <td>
+        ${s.type !== 'manual' && s.type !== 'csv' ? `<button class="btn btn-outline btn-sm" onclick="syncSource(${s.id})">↺ Sync</button>` : ''}
+      </td>
+    </tr>`).join('');
+  } catch(e) {}
+}
+
+async function syncSource(id) {
+  toast('Syncing…');
+  try {
+    const d = await fetch(API + '/api/v1/marketplace/sources/' + id + '/sync', { method: 'POST' }).then(r => r.json());
+    toast('Sync done: ' + JSON.stringify(d.stats));
+    loadMktSources(); loadMktProducts();
+  } catch(e) { toast('Sync failed: ' + e.message, true); }
+}
+
+async function syncAllSources() {
+  toast('Syncing all sources…');
+  try {
+    const d = await fetch(API + '/api/v1/marketplace/sources/sync-all', { method: 'POST' }).then(r => r.json());
+    toast('All synced');
+    loadMktSources(); loadMktProducts();
+  } catch(e) { toast('Sync failed: ' + e.message, true); }
+}
+
+async function saveSource() {
+  const body = {
+    name:   document.getElementById('src-name').value.trim(),
+    type:   document.getElementById('src-type').value,
+    config: JSON.parse(document.getElementById('src-config').value || '{}'),
+    active: true,
+  };
+  if (!body.name) { toast('Source name required', true); return; }
+  try {
+    const d = await fetch(API + '/api/v1/marketplace/sources', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+    }).then(r => r.json());
+    if (d.error) { toast('Error: ' + d.error, true); return; }
+    toast('Source saved');
+    toggleForm('src-form');
+    loadMktSources();
+  } catch(e) { toast('Failed: ' + e.message, true); }
+}
+
+// Load Chart.js dynamically for reports
+(function() {
+  if (!window.Chart) {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
+    document.head.appendChild(s);
+  }
+})();
+
+// Set default date range (last 30 days) on reports tab
+document.addEventListener('DOMContentLoaded', () => {
+  const toEl   = document.getElementById('rpt-to');
+  const fromEl = document.getElementById('rpt-from');
+  if (toEl && fromEl) {
+    const now  = new Date();
+    const ago  = new Date(now); ago.setDate(ago.getDate() - 30);
+    toEl.value   = now.toISOString().split('T')[0];
+    fromEl.value = ago.toISOString().split('T')[0];
+  }
+});
 
 // ── Invoices ──────────────────────────────────────────────────────────────────
 let _invLookupTimer = null;

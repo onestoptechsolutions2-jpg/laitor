@@ -38,6 +38,29 @@ const RULES = [
     ],
   },
   {
+    priority: 1,
+    intent: INTENTS.VIEW_CART,
+    keywords: ['cart', 'my cart', 'basket', 'checkout', 'view cart', 'my order'],
+  },
+  {
+    priority: 1,
+    intent: INTENTS.TRACK_ORDER,
+    keywords: ['track', 'where is my order', 'order status', 'delivery status', 'my order status'],
+  },
+  {
+    priority: 2,
+    intent: INTENTS.SHOP,
+    keywords: [
+      'shop', 'shopping', 'marketplace', 'store', 'browse', 'catalog',
+      'buy something', 'want to buy', 'i want', 'show me', 'what do you sell',
+    ],
+  },
+  {
+    priority: 2,
+    intent: INTENTS.SEARCH_PRODUCT,
+    keywords: ['search', 'find', 'looking for', 'do you have', 'do you sell', 'got any'],
+  },
+  {
     priority: 3,
     intent: INTENTS.INTERNET_LEAD,
     keywords: [

@@ -237,6 +237,161 @@ INSERT INTO menu_items (label, description, icon, action, display_order) VALUES
   ('Speak to an Agent',    'Get help from our team directly',   '👤', 'AGENT_HANDOFF',   4)
 ON CONFLICT DO NOTHING;
 
+
+/* ════════════════════════════════════════════════════════════════
+   MARKETPLACE TABLES
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── Marketplace categories (separate from service categories) ── */
+CREATE TABLE IF NOT EXISTS marketplace_categories (
+  id            SERIAL PRIMARY KEY,
+  name          VARCHAR(255) NOT NULL,
+  slug          VARCHAR(100) UNIQUE NOT NULL,
+  icon          VARCHAR(20)   DEFAULT '📦',
+  markup_pct    DECIMAL(5,2)  DEFAULT 20.00,
+  display_order INT           DEFAULT 0,
+  active        BOOLEAN       DEFAULT true,
+  created_at    TIMESTAMPTZ   DEFAULT NOW()
+);
+
+/* ── External product sources (Jumia / AliExpress / Amazon / CSV) ── */
+CREATE TABLE IF NOT EXISTS product_sources (
+  id          SERIAL PRIMARY KEY,
+  name        VARCHAR(100) NOT NULL,
+  type        VARCHAR(50)  NOT NULL,   /* jumia | aliexpress | amazon | csv | manual */
+  config      JSONB        DEFAULT '{}',
+  active      BOOLEAN      DEFAULT true,
+  last_sync   TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ  DEFAULT NOW()
+);
+
+/* ── Product catalog ── */
+CREATE TABLE IF NOT EXISTS products (
+  id            SERIAL PRIMARY KEY,
+  sku           VARCHAR(255) UNIQUE,
+  source_id     INT  REFERENCES product_sources(id),
+  external_id   VARCHAR(255),
+  category_id   INT  REFERENCES marketplace_categories(id),
+  name          VARCHAR(500) NOT NULL,
+  description   TEXT,
+  image_url     VARCHAR(1000),
+  cost_price    DECIMAL(10,2) DEFAULT 0,
+  markup_pct    DECIMAL(5,2),        /* NULL = inherit from category */
+  sell_price    DECIMAL(10,2),       /* NULL = auto from cost + markup */
+  currency      VARCHAR(10)  DEFAULT 'KES',
+  stock_status  VARCHAR(20)  DEFAULT 'in_stock',
+  supplier_url  VARCHAR(1000),
+  shipping_info VARCHAR(255),
+  attributes    JSONB        DEFAULT '{}',
+  active        BOOLEAN      DEFAULT true,
+  featured      BOOLEAN      DEFAULT false,
+  created_at    TIMESTAMPTZ  DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ  DEFAULT NOW()
+);
+
+/* ── Shopping carts ── */
+CREATE TABLE IF NOT EXISTS carts (
+  id          SERIAL PRIMARY KEY,
+  customer_id INT REFERENCES customers(id),
+  status      VARCHAR(20) DEFAULT 'active',  /* active | checked_out | abandoned */
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+/* ── Cart line items ── */
+CREATE TABLE IF NOT EXISTS cart_items (
+  id          SERIAL PRIMARY KEY,
+  cart_id     INT REFERENCES carts(id) ON DELETE CASCADE,
+  product_id  INT REFERENCES products(id),
+  qty         INT          DEFAULT 1,
+  unit_price  DECIMAL(10,2) NOT NULL,
+  created_at  TIMESTAMPTZ  DEFAULT NOW()
+);
+
+/* ── Marketplace orders ── */
+CREATE TABLE IF NOT EXISTS marketplace_orders (
+  id                  SERIAL PRIMARY KEY,
+  order_number        VARCHAR(50) UNIQUE NOT NULL,
+  customer_id         INT  REFERENCES customers(id),
+  cart_id             INT  REFERENCES carts(id),
+  status              VARCHAR(50)   DEFAULT 'pending',
+  delivery_address    TEXT,
+  delivery_notes      TEXT,
+  payment_method      VARCHAR(50)   DEFAULT 'mpesa',
+  payment_status      VARCHAR(30)   DEFAULT 'unpaid',
+  mpesa_checkout_id   VARCHAR(255),
+  mpesa_receipt       VARCHAR(255),
+  subtotal            DECIMAL(10,2) DEFAULT 0,
+  delivery_fee        DECIMAL(10,2) DEFAULT 0,
+  total               DECIMAL(10,2) DEFAULT 0,
+  amount_paid         DECIMAL(10,2) DEFAULT 0,
+  currency            VARCHAR(10)   DEFAULT 'KES',
+  notes               TEXT,
+  supplier_notified   BOOLEAN       DEFAULT false,
+  dispatched_at       TIMESTAMPTZ,
+  delivered_at        TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ   DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ   DEFAULT NOW()
+);
+
+/* ── Order line items ── */
+CREATE TABLE IF NOT EXISTS marketplace_order_items (
+  id            SERIAL PRIMARY KEY,
+  order_id      INT REFERENCES marketplace_orders(id),
+  product_id    INT REFERENCES products(id),
+  product_name  VARCHAR(500),
+  qty           INT          DEFAULT 1,
+  unit_price    DECIMAL(10,2) NOT NULL,
+  cost_price    DECIMAL(10,2) DEFAULT 0,
+  total         DECIMAL(10,2) NOT NULL,
+  supplier_url  VARCHAR(1000),
+  created_at    TIMESTAMPTZ  DEFAULT NOW()
+);
+
+/* ── M-Pesa Daraja transaction log ── */
+CREATE TABLE IF NOT EXISTS mpesa_transactions (
+  id                  SERIAL PRIMARY KEY,
+  order_id            INT REFERENCES marketplace_orders(id),
+  checkout_request_id VARCHAR(255),
+  merchant_request_id VARCHAR(255),
+  result_code         INT,
+  result_desc         TEXT,
+  amount              DECIMAL(10,2),
+  receipt_number      VARCHAR(255),
+  transaction_date    VARCHAR(50),
+  phone               VARCHAR(20),
+  raw                 JSONB,
+  created_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+/* ── Marketplace indexes ── */
+CREATE INDEX IF NOT EXISTS idx_products_category   ON products(category_id);
+CREATE INDEX IF NOT EXISTS idx_products_source     ON products(source_id);
+CREATE INDEX IF NOT EXISTS idx_products_active     ON products(active);
+CREATE INDEX IF NOT EXISTS idx_products_featured   ON products(featured);
+CREATE INDEX IF NOT EXISTS idx_cart_items_cart     ON cart_items(cart_id);
+CREATE INDEX IF NOT EXISTS idx_carts_customer      ON carts(customer_id);
+CREATE INDEX IF NOT EXISTS idx_morders_customer    ON marketplace_orders(customer_id);
+CREATE INDEX IF NOT EXISTS idx_morders_status      ON marketplace_orders(status);
+CREATE INDEX IF NOT EXISTS idx_morders_payment     ON marketplace_orders(payment_status);
+CREATE INDEX IF NOT EXISTS idx_mpesa_checkout      ON mpesa_transactions(checkout_request_id);
+
+/* ── Seed default marketplace categories ── */
+INSERT INTO marketplace_categories (name, slug, icon, markup_pct, display_order) VALUES
+  ('Electronics',      'electronics',  '📱', 20, 1),
+  ('Fashion',          'fashion',      '👕', 35, 2),
+  ('Home & Living',    'home',         '🏠', 25, 3),
+  ('Beauty & Health',  'beauty',       '💄', 30, 4),
+  ('Kitchen',          'kitchen',      '🍳', 25, 5),
+  ('Computers',        'computers',    '💻', 18, 6),
+  ('Sports & Outdoor', 'sports',       '⚽', 30, 7),
+  ('Toys & Kids',      'toys',         '🧸', 35, 8)
+ON CONFLICT (slug) DO NOTHING;
+
+/* ── Seed default product source (manual) ── */
+INSERT INTO product_sources (name, type, config, active) VALUES
+  ('Manual Entry', 'manual', '{}', true)
+ON CONFLICT DO NOTHING;
 /* ── Indexes ── */
 CREATE INDEX IF NOT EXISTS idx_customers_phone      ON customers(phone);
 CREATE INDEX IF NOT EXISTS idx_customers_consent    ON customers(consent_status);

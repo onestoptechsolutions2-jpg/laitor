@@ -50,6 +50,12 @@ const quoteSvc      = require('../services/quote');
 const manager       = require('../services/manager');
 const logger        = require('../utils/logger');
 
+// ── Marketplace
+const mktCatalog  = require('../services/marketplace/catalog');
+const mktCart     = require('../services/marketplace/cart');
+const mktCheckout = require('../services/marketplace/checkout');
+const mktPayment  = require('../services/marketplace/payment');
+
 // ─── State constants ──────────────────────────────────────────────────────────
 
 const STATES = {
@@ -63,7 +69,15 @@ const STATES = {
   PRODUCT_CONFIRM:  'PRODUCT_CONFIRM',
   SUPPORT_AWAIT:    'SUPPORT_AWAIT',
   AGENT_HANDOFF:    'AGENT_HANDOFF',
-  QUOTE_PENDING:    'QUOTE_PENDING',   // Awaiting customer approve/decline tap
+  QUOTE_PENDING:       'QUOTE_PENDING',
+  // ── Marketplace states
+  SHOPPING_MAIN:       'SHOPPING_MAIN',
+  SHOPPING_CATEGORY:   'SHOPPING_CATEGORY',
+  SHOPPING_PRODUCT:    'SHOPPING_PRODUCT',
+  SHOPPING_CART:       'SHOPPING_CART',
+  CHECKOUT_ADDRESS:    'CHECKOUT_ADDRESS',
+  CHECKOUT_PAYMENT:    'CHECKOUT_PAYMENT',
+  CHECKOUT_MPESA:      'CHECKOUT_MPESA',
 };
 
 // ─── Utility helpers ──────────────────────────────────────────────────────────
@@ -563,7 +577,16 @@ const process = async (msg) => {
     } else if (currentState === STATES.QUOTE_PENDING) {
       result = await handleQuotePending({ text, customer, phone, sess });
     } else if (currentState === STATES.MAIN_MENU) {
-      result = await handleMainMenu({ text });
+      // Intercept shop/cart intents before main menu handler
+      const shopTriggers = ['shop','shopping','marketplace','buy','store','browse catalog','cart','my cart','checkout','track order'];
+      const tLow = (text || '').toLowerCase().trim();
+      if (tLow === 'shop' || tLow === 'shopping' || tLow === 'marketplace' || tLow === '🛍️ shop') {
+        result = await handleShoppingMain();
+      } else if (tLow === 'cart' || tLow === 'my cart' || tLow === '🛒' || tLow === 'view cart') {
+        result = await handleShoppingCart({ customer, sess });
+      } else {
+        result = await handleMainMenu({ text });
+      }
     } else if (currentState === STATES.INTERNET_BROWSE) {
       result = await handleInternetBrowse({ text, sess });
     } else if (currentState === STATES.PRODUCT_BROWSE) {
@@ -574,6 +597,46 @@ const process = async (msg) => {
       result = await handleConfirm({ text, customer, phone, name, sess, orderType: 'product' });
     } else if (currentState === STATES.SUPPORT_AWAIT) {
       result = await handleSupportAwait({ text, customer, phone, name });
+    } else if (currentState === STATES.SHOPPING_MAIN) {
+      result = await handleShoppingMain();
+    } else if (currentState === STATES.SHOPPING_CATEGORY) {
+      const t = (text || '').trim();
+      if (t.startsWith('ADD_CART_')) {
+        result = await handleAddToCart({ text, customer, sess });
+      } else if (t.startsWith('PRD_')) {
+        result = await handleShoppingProduct({ text, sess });
+      } else {
+        result = await handleShoppingCategory({ text, sess });
+      }
+    } else if (currentState === STATES.SHOPPING_PRODUCT) {
+      const t = (text || '').trim();
+      if (t.startsWith('ADD_CART_')) {
+        result = await handleAddToCart({ text, customer, sess });
+      } else if (t === 'CART_VIEW') {
+        result = await handleShoppingCart({ customer, sess });
+      } else if (t === 'SHOP_BACK' || t === 'SHOP_MENU') {
+        result = sess.shopCategoryId
+          ? await handleShoppingCategory({ text: `CAT_${sess.shopCategoryId}`, sess })
+          : await handleShoppingMain();
+      } else {
+        result = await handleShoppingProduct({ text, sess });
+      }
+    } else if (currentState === STATES.SHOPPING_CART) {
+      const t = (text || '').trim();
+      if (t === 'CHECKOUT_START') {
+        result = await handleCheckoutAddress({ text, customer, sess });
+      } else if (t === 'CART_CLEAR') {
+        await mktCart.clearCart(customer.id);
+        result = { nextState: STATES.SHOPPING_MAIN, replies: [{ type: 'text', text: '🗑 Cart cleared.' }] };
+      } else {
+        result = await handleShoppingCart({ customer, sess });
+      }
+    } else if (currentState === STATES.CHECKOUT_ADDRESS) {
+      result = await handleCheckoutAddress({ text, customer, sess });
+    } else if (currentState === STATES.CHECKOUT_PAYMENT) {
+      result = await handleCheckoutPayment({ text, customer, name, phone, sess });
+    } else if (currentState === STATES.CHECKOUT_MPESA) {
+      result = await handleCheckoutMpesa({ text, customer, sess });
     } else if (currentState === STATES.AGENT_HANDOFF) {
       logger.info('Message in agent handoff — not auto-replied', { phone });
       return;
@@ -609,6 +672,313 @@ const process = async (msg) => {
   }
 
   logger.info('Orchestrator done', { phone, nextState: result.nextState });
+};
+
+
+// ═══════════════════════════════════════════════════════════════════
+// MARKETPLACE HANDLERS
+// ═══════════════════════════════════════════════════════════════════
+
+/** Show category list */
+const handleShoppingMain = async () => {
+  const cats = await mktCatalog.getCategories();
+  if (!cats.length) {
+    return {
+      nextState: STATES.MAIN_MENU,
+      replies: [{ type: 'text', text: '🛍️ Our marketplace is being stocked. Check back soon!' }],
+    };
+  }
+  const listPayload = mktCatalog.buildCategoryList(cats);
+  return {
+    nextState: STATES.SHOPPING_CATEGORY,
+    sessionData: {},
+    replies: [{ type: 'list', ...listPayload }],
+  };
+};
+
+/** Browse products in a category or handle pagination */
+const handleShoppingCategory = async ({ text, sess }) => {
+  const t = (text || '').trim();
+
+  // Navigation controls
+  if (t === 'SHOP_MENU' || t.toLowerCase() === 'back') return handleShoppingMain();
+  if (t === 'CART_VIEW')  return handleShoppingCart({ sess });
+
+  // Pagination: PAGE_NEXT_2 / PAGE_PREV_1
+  let page = parseInt(sess.shopPage || 1);
+  let categoryId = sess.shopCategoryId;
+
+  if (t.startsWith('PAGE_NEXT_')) { page = parseInt(t.split('_')[2]); }
+  else if (t.startsWith('PAGE_PREV_')) { page = parseInt(t.split('_')[2]); }
+  else if (t.startsWith('CAT_')) { categoryId = parseInt(t.split('_')[1]); page = 1; }
+  else if (t.startsWith('PRD_')) {
+    return handleShoppingProduct({ productId: parseInt(t.split('_')[1]), sess });
+  }
+
+  if (!categoryId) return handleShoppingMain();
+
+  const cat = await mktCatalog.getCategory(categoryId);
+  const { products, pages } = await mktCatalog.getProducts({ categoryId, page });
+
+  if (!products.length) {
+    return {
+      nextState: STATES.SHOPPING_CATEGORY,
+      sessionData: { shopCategoryId: categoryId, shopPage: page },
+      replies: [{ type: 'text', text: `No products in ${cat?.name || 'this category'} yet. Reply *SHOP* to browse other categories.` }],
+    };
+  }
+
+  const listPayload = mktCatalog.buildProductList(products, page, pages, cat?.name || 'Products');
+  return {
+    nextState: STATES.SHOPPING_CATEGORY,
+    sessionData: { shopCategoryId: categoryId, shopPage: page },
+    replies: [{ type: 'list', ...listPayload }],
+  };
+};
+
+/** Show product detail */
+const handleShoppingProduct = async ({ text, productId: pid, sess }) => {
+  const t   = (text || '').trim();
+  const id  = pid || (t.startsWith('PRD_') ? parseInt(t.split('_')[1]) : null) || sess.shopProductId;
+  if (!id) return handleShoppingMain();
+
+  const product = await mktCatalog.getProduct(id);
+  if (!product) return { nextState: STATES.SHOPPING_CATEGORY, replies: [{ type: 'text', text: 'Product not found.' }] };
+
+  const detail = mktCatalog.buildProductDetail(product);
+  const replies = [];
+  if (product.image_url) replies.push({ type: 'image', url: product.image_url, caption: detail.text });
+  else replies.push({ type: 'text', text: detail.text });
+  replies.push({ type: 'buttons', ...detail });
+
+  return {
+    nextState: STATES.SHOPPING_PRODUCT,
+    sessionData: { shopProductId: id, shopCategoryId: product.category_id },
+    replies,
+  };
+};
+
+/** Add to cart from button tap */
+const handleAddToCart = async ({ text, customer, sess }) => {
+  const t         = (text || '').trim();
+  const productId = t.startsWith('ADD_CART_') ? parseInt(t.split('_')[2]) : sess.shopProductId;
+  if (!productId) return handleShoppingCart({ sess, customer });
+
+  try {
+    const summary = await mktCart.addItem(customer.id, productId, 1);
+    const product = await mktCatalog.getProduct(productId);
+    return {
+      nextState: STATES.SHOPPING_PRODUCT,
+      sessionData: { shopProductId: productId },
+      replies: [{
+        type: 'buttons',
+        text: `✅ *${product?.name || 'Item'}* added to cart!
+
+🛒 You have ${summary.count} item(s) — Total: KES ${summary.subtotal.toLocaleString('en-KE', { minimumFractionDigits: 2 })}`,
+        buttons: [
+          { buttonId: 'CART_VIEW',   buttonText: { displayText: '🛒 View Cart'         }, type: 1 },
+          { buttonId: 'SHOP_MENU',   buttonText: { displayText: '🏠 Keep Shopping'      }, type: 1 },
+          { buttonId: `PRD_${productId}`, buttonText: { displayText: '↩ Back to Item'  }, type: 1 },
+        ],
+      }],
+    };
+  } catch (err) {
+    return {
+      nextState: STATES.SHOPPING_PRODUCT,
+      replies: [{ type: 'text', text: `❌ Could not add to cart: ${err.message}` }],
+    };
+  }
+};
+
+/** Show cart summary with action buttons */
+const handleShoppingCart = async ({ customer, sess }) => {
+  const summary  = await mktCart.getCartSummary(customer.id);
+  const cartText = mktCart.buildCartText(summary);
+
+  if (!summary.items.length) {
+    return {
+      nextState: STATES.SHOPPING_MAIN,
+      replies: [{
+        type: 'buttons',
+        text: cartText,
+        buttons: [
+          { buttonId: 'SHOP_MENU', buttonText: { displayText: '🛍️ Browse Products' }, type: 1 },
+        ],
+      }],
+    };
+  }
+
+  return {
+    nextState: STATES.SHOPPING_CART,
+    replies: [{
+      type: 'buttons',
+      text: cartText,
+      buttons: [
+        { buttonId: 'CHECKOUT_START',  buttonText: { displayText: '✅ Checkout'       }, type: 1 },
+        { buttonId: 'SHOP_MENU',       buttonText: { displayText: '🛍️ Keep Shopping'  }, type: 1 },
+        { buttonId: 'CART_CLEAR',      buttonText: { displayText: '🗑 Clear Cart'      }, type: 1 },
+      ],
+    }],
+  };
+};
+
+/** Collect delivery address */
+const handleCheckoutAddress = async ({ text, customer, sess }) => {
+  const t = (text || '').trim();
+
+  if (t === 'CART_CLEAR') {
+    await mktCart.clearCart(customer.id);
+    return { nextState: STATES.SHOPPING_MAIN, replies: [{ type: 'text', text: '🗑 Cart cleared. Reply *SHOP* to start over.' }] };
+  }
+  if (t === 'CHECKOUT_START' || t.toLowerCase() === 'checkout') {
+    const summary = await mktCart.getCartSummary(customer.id);
+    if (!summary.items.length) return handleShoppingCart({ customer, sess });
+    return {
+      nextState: STATES.CHECKOUT_ADDRESS,
+      replies: [{
+        type: 'text',
+        text: `📍 *Where should we deliver?*
+
+Please type your full delivery address:
+_(Include building/estate, street, and town/city)_
+
+Example: _Westlands Plaza, 3rd floor, Nairobi_`,
+      }],
+    };
+  }
+
+  // Address was typed
+  const address = t;
+  if (address.length < 10) {
+    return {
+      nextState: STATES.CHECKOUT_ADDRESS,
+      replies: [{ type: 'text', text: '❌ Address too short. Please enter your full delivery address including estate, street, and town.' }],
+    };
+  }
+
+  return {
+    nextState: STATES.CHECKOUT_PAYMENT,
+    sessionData: { checkoutAddress: address },
+    replies: [{
+      type: 'buttons',
+      text: `📦 *Delivery to:*
+${address}
+
+💳 *How would you like to pay?*`,
+      buttons: [
+        { buttonId: 'PAY_MPESA', buttonText: { displayText: '📱 M-Pesa'           }, type: 1 },
+        { buttonId: 'PAY_COD',   buttonText: { displayText: '🏠 Cash on Delivery'  }, type: 1 },
+        { buttonId: 'PAY_BANK',  buttonText: { displayText: '🏦 Bank Transfer'     }, type: 1 },
+      ],
+    }],
+  };
+};
+
+/** Handle payment method selection → create order */
+const handleCheckoutPayment = async ({ text, customer, name, phone, sess }) => {
+  const t      = (text || '').trim().toUpperCase();
+  const method = t === 'PAY_MPESA' ? 'mpesa'
+               : t === 'PAY_COD'   ? 'cod'
+               : t === 'PAY_BANK'  ? 'bank'
+               : null;
+
+  if (!method) {
+    return {
+      nextState: STATES.CHECKOUT_PAYMENT,
+      replies: [{ type: 'text', text: 'Please select a payment method using the buttons above.' }],
+    };
+  }
+
+  const address = sess.checkoutAddress || 'Address not provided';
+
+  try {
+    const order = await mktCheckout.createOrder({
+      customerId:      customer.id,
+      deliveryAddress: address,
+      paymentMethod:   method,
+    });
+
+    if (method === 'mpesa') {
+      const stkResult = await mktCheckout.initiateMpesa(order, phone);
+      if (stkResult.success) {
+        return {
+          nextState: STATES.CHECKOUT_MPESA,
+          sessionData: { pendingOrderId: order.id, checkoutRequestId: stkResult.checkoutRequestId },
+          replies: [{
+            type: 'text',
+            text: `📲 *M-Pesa prompt sent to ${phone}!*
+
+Enter your M-Pesa PIN to pay:
+
+💰 Amount: *KES ${parseFloat(order.total).toLocaleString('en-KE', { minimumFractionDigits: 2 })}*
+📋 Ref: *${order.order_number}*
+
+⏳ Waiting for confirmation…`,
+          }],
+        };
+      }
+      // STK push failed — fallback to manual paybill
+      const instructions = mktCheckout.buildPaymentInstructions(order);
+      return {
+        nextState: STATES.CHECKOUT_MPESA,
+        sessionData: { pendingOrderId: order.id },
+        replies: [{ type: 'text', text: instructions + '\n\nReply *PAID <M-Pesa code>* once done.' }],
+      };
+    }
+
+    // COD or Bank — confirm immediately
+    const confirmation = mktCheckout.buildOrderConfirmation(order);
+    return {
+      nextState: STATES.MAIN_MENU,
+      sessionData: { checkoutAddress: null },
+      replies: [{ type: 'text', text: confirmation }, ...(await menu.buildMainMenu())],
+    };
+  } catch (err) {
+    logger.error('checkout: createOrder failed', { phone, error: err.message });
+    return {
+      nextState: STATES.SHOPPING_CART,
+      replies: [{ type: 'text', text: `❌ Checkout failed: ${err.message}. Please try again or type *MENU*.` }],
+    };
+  }
+};
+
+/** Handle M-Pesa pending state — accept manual payment codes */
+const handleCheckoutMpesa = async ({ text, customer, sess }) => {
+  const t = (text || '').trim();
+
+  // Customer sending manual M-Pesa confirmation code: PAID QHJ7X...
+  const paidMatch = t.match(/^PAID\s+([A-Z0-9]+)$/i);
+  if (paidMatch) {
+    const ref     = paidMatch[1].toUpperCase();
+    const orderId = sess.pendingOrderId;
+    if (orderId) {
+      const order = await mktCheckout.getOrder(orderId);
+      if (order) {
+        await mktCheckout.confirmManualPayment(orderId, order.total, ref);
+        const confirmation = mktCheckout.buildOrderConfirmation({ ...order, payment_method: 'mpesa', payment_status: 'paid' });
+        return {
+          nextState: STATES.MAIN_MENU,
+          sessionData: { pendingOrderId: null },
+          replies: [{ type: 'text', text: confirmation }, ...(await menu.buildMainMenu())],
+        };
+      }
+    }
+  }
+
+  return {
+    nextState: STATES.CHECKOUT_MPESA,
+    replies: [{
+      type: 'text',
+      text: `⏳ Waiting for your M-Pesa payment.
+
+If you've already paid, reply:
+*PAID <M-Pesa code>*
+
+Example: _PAID QHJ7XY123Z_
+
+Or type *MENU* to go back.`,
+    }],
+  };
 };
 
 module.exports = { process, STATES };

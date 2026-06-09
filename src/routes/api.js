@@ -739,4 +739,245 @@ router.get('/diagnostics', async (_req, res) => {
   res.status(allOk ? 200 : 207).json({ status: allOk ? 'all_ok' : 'partial', results });
 });
 
+
+// ════════════════════════════════════════════════════════════════════════
+// MARKETPLACE ROUTES
+// ════════════════════════════════════════════════════════════════════════
+
+const mktCatalog  = require('../services/marketplace/catalog');
+const mktCart     = require('../services/marketplace/cart');
+const mktCheckout = require('../services/marketplace/checkout');
+const mktFetcher  = require('../services/marketplace/fetcher');
+const mktReports  = require('../services/marketplace/reports');
+const mktPayment  = require('../services/marketplace/payment');
+
+// ── Categories ───────────────────────────────────────────────────────────────
+
+router.get('/marketplace/categories', async (_req, res) => {
+  try {
+    const cats = await mktCatalog.getCategories();
+    res.json({ categories: cats });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/marketplace/categories', async (req, res) => {
+  try {
+    const cat = await mktCatalog.upsertCategory(req.body);
+    res.status(201).json({ category: cat });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/marketplace/categories/:id', async (req, res) => {
+  try {
+    const cat = await mktCatalog.upsertCategory({ ...req.body, id: parseInt(req.params.id) });
+    res.json({ category: cat });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Products ─────────────────────────────────────────────────────────────────
+
+router.get('/marketplace/products', async (req, res) => {
+  try {
+    const { category_id, search, page, limit, featured } = req.query;
+    const result = await mktCatalog.getProducts({
+      categoryId:    category_id ? parseInt(category_id) : undefined,
+      search,
+      page:          parseInt(page || 1),
+      limit:         parseInt(limit || 20),
+      featuredOnly:  featured === 'true',
+      includeInactive: req.query.include_inactive === 'true',
+    });
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/marketplace/products/:id', async (req, res) => {
+  try {
+    const p = await mktCatalog.getProduct(parseInt(req.params.id));
+    if (!p) return res.status(404).json({ error: 'Product not found' });
+    res.json({ product: p });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/marketplace/products', async (req, res) => {
+  try {
+    const p = await mktCatalog.createProduct(req.body);
+    res.status(201).json({ product: p });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/marketplace/products/:id', async (req, res) => {
+  try {
+    const p = await mktCatalog.updateProduct(parseInt(req.params.id), req.body);
+    res.json({ product: p });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Product Sources ───────────────────────────────────────────────────────────
+
+router.get('/marketplace/sources', async (_req, res) => {
+  try {
+    const sources = await mktFetcher.getSources(false);
+    res.json({ sources });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/marketplace/sources', async (req, res) => {
+  try {
+    const src = await mktFetcher.upsertSource(req.body);
+    res.status(201).json({ source: src });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/marketplace/sources/:id', async (req, res) => {
+  try {
+    const src = await mktFetcher.upsertSource({ ...req.body, id: parseInt(req.params.id) });
+    res.json({ source: src });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/marketplace/sources/:id/sync', async (req, res) => {
+  try {
+    const stats = await mktFetcher.syncSource(parseInt(req.params.id));
+    res.json({ stats });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/marketplace/sources/sync-all', async (_req, res) => {
+  try {
+    const stats = await mktFetcher.syncAll();
+    res.json({ stats });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// CSV import
+router.post('/marketplace/products/import-csv', async (req, res) => {
+  try {
+    const { csvText, sourceId } = req.body;
+    if (!csvText) return res.status(400).json({ error: 'csvText required' });
+    const cats = await mktCatalog.getCategories();
+    const catMap = {};
+    cats.forEach(c => { catMap[c.slug] = c.id; });
+    const items = mktFetcher.parseCsv(csvText, sourceId || 1, catMap);
+    const stats = await mktCatalog.bulkUpsert(items);
+    res.json({ stats, parsed: items.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Orders ────────────────────────────────────────────────────────────────────
+
+router.get('/marketplace/orders', async (req, res) => {
+  try {
+    const { status, customer_id, limit, offset } = req.query;
+    const orders = await mktCheckout.listOrders({
+      status, customerId: customer_id ? parseInt(customer_id) : undefined,
+      limit: parseInt(limit || 50), offset: parseInt(offset || 0),
+    });
+    res.json({ orders });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/marketplace/orders/:id', async (req, res) => {
+  try {
+    const order = await mktCheckout.getOrder(parseInt(req.params.id));
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    res.json({ order });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/marketplace/orders/:id/dispatch', async (req, res) => {
+  try {
+    const order = await mktCheckout.markDispatched(parseInt(req.params.id), req.body.tracking_info);
+    res.json({ order });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/marketplace/orders/:id/deliver', async (req, res) => {
+  try {
+    const order = await mktCheckout.markDelivered(parseInt(req.params.id));
+    res.json({ order });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/marketplace/orders/:id/confirm-payment', async (req, res) => {
+  try {
+    const { amount, reference } = req.body;
+    const order = await mktCheckout.confirmManualPayment(parseInt(req.params.id), amount, reference);
+    res.json({ order });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── M-Pesa Daraja callback ────────────────────────────────────────────────────
+
+router.post('/mpesa/callback', async (req, res) => {
+  // Always respond 200 immediately — Daraja retries if it doesn't get a fast response
+  res.json({ ResultCode: 0, ResultDesc: 'Success' });
+  try {
+    const result = await mktPayment.handleCallback(req.body);
+    logger.info('mpesa/callback processed', result);
+    // TODO: push WhatsApp confirmation to customer via their phone
+    // const order = await mktCheckout.getOrder(result.orderId);
+    // if (order && result.success) await whatsapp.sendText(order.phone, mktCheckout.buildOrderConfirmation(order));
+  } catch (e) {
+    logger.error('mpesa/callback error', { error: e.message });
+  }
+});
+
+// ── Reports ───────────────────────────────────────────────────────────────────
+
+router.get('/marketplace/reports/summary', async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const [summary, profit, statusBreakdown, paymentMethods] = await Promise.all([
+      mktReports.getSalesSummary({ from, to }),
+      mktReports.getProfitMargin({ from, to }),
+      mktReports.getOrderStatusBreakdown(),
+      mktReports.getPaymentMethodBreakdown({ from, to }),
+    ]);
+    res.json({ summary, profit, statusBreakdown, paymentMethods });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/marketplace/reports/daily', async (req, res) => {
+  try {
+    const data = await mktReports.getDailyRevenue(req.query);
+    res.json({ data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/marketplace/reports/products', async (req, res) => {
+  try {
+    const data = await mktReports.getTopProducts({ ...req.query, limit: parseInt(req.query.limit || 15) });
+    res.json({ data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/marketplace/reports/customers', async (req, res) => {
+  try {
+    const data = await mktReports.getTopCustomers({ ...req.query, limit: parseInt(req.query.limit || 15) });
+    res.json({ data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/marketplace/reports/categories', async (req, res) => {
+  try {
+    const data = await mktReports.getRevenueByCategory(req.query);
+    res.json({ data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/marketplace/reports/full', async (req, res) => {
+  try {
+    const data = await mktReports.getFullReport(req.query);
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/marketplace/reports/sources', async (req, res) => {
+  try {
+    const data = await mktReports.getSourcePerformance(req.query);
+    res.json({ data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 module.exports = router;
