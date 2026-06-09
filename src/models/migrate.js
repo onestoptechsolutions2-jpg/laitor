@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS catalog_cache (
   description TEXT,
   price       DECIMAL(10,2) DEFAULT 0,
   type        VARCHAR(50)   DEFAULT 'product',
+  source      VARCHAR(20)   DEFAULT 'manager',  -- 'manager' | 'manual'
   category_id INT,
   raw         JSONB,
   cached_at   TIMESTAMPTZ DEFAULT NOW()
@@ -156,7 +157,8 @@ CREATE TABLE IF NOT EXISTS sync_queue (
   last_error    TEXT,
   next_retry_at TIMESTAMPTZ  DEFAULT NOW(),
   created_at    TIMESTAMPTZ  DEFAULT NOW(),
-  updated_at    TIMESTAMPTZ  DEFAULT NOW()
+  updated_at    TIMESTAMPTZ  DEFAULT NOW(),
+  CONSTRAINT uq_sync_queue_entity UNIQUE (entity_type, entity_id, target)
 );
 
 /* ── Bot configuration (editable from admin dashboard) ── */
@@ -228,6 +230,7 @@ ALTER TABLE orders    ADD COLUMN IF NOT EXISTS invoice_ref      VARCHAR(255);
 ALTER TABLE orders    ADD COLUMN IF NOT EXISTS quote_id         INT;
 ALTER TABLE tickets   ADD COLUMN IF NOT EXISTS agent_id         INT;
 ALTER TABLE catalog_cache ADD COLUMN IF NOT EXISTS category_id  INT;
+ALTER TABLE catalog_cache ADD COLUMN IF NOT EXISTS source       VARCHAR(20) DEFAULT 'manager';
 
 /* ── Seed default menu items ── */
 INSERT INTO menu_items (label, description, icon, action, display_order) VALUES
@@ -781,7 +784,6 @@ async function seedDefaultAdmin(client) {
   console.log('[migrate] ✓ Default admin created.');
   console.log(`[migrate]   Username : ${username}`);
   console.log(`[migrate]   Email    : ${email}`);
-  console.log(`[migrate]   Password : ${password}`);
   console.log('[migrate]   ⚠  Change this password immediately after first login!');
 }
 
@@ -795,8 +797,8 @@ async function seedDefaultAdmin(client) {
     await seedDefaultAdmin(client);
   } catch (err) {
     console.error('[migrate] FAILED:', err.message);
-    console.error('[migrate] Code   :', err.code);
-    console.error('[migrate] Detail :', err.detail);
+    console.error('[migrate] FAILED:', err.message);
+    console.error(err.stack);
     process.exit(1);
   } finally {
     if (client) client.release();

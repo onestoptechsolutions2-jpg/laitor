@@ -48,8 +48,12 @@ const whatsapp = require('../services/whatsapp');
 const cfgStore = require('../services/config-store');
 const config   = require('../config');
 const logger   = require('../utils/logger');
+const { adminAuth } = require('./auth');
 
 const router = express.Router();
+
+// All /api/v1/* routes require a valid admin JWT
+router.use(adminAuth);
 
 // ── Dashboard stats ───────────────────────────────────────────────────────────
 
@@ -174,7 +178,7 @@ router.get('/catalog', async (_req, res) => {
 
 router.post('/catalog/refresh', async (_req, res) => {
   try {
-    await query(`DELETE FROM catalog_cache WHERE raw IS NOT NULL`);
+    await query(`DELETE FROM catalog_cache WHERE source = 'manager'`);
     const items = await catalog.getCatalog();
     return res.json({ success: true, count: items.length });
   } catch (err) { return res.status(500).json({ error: err.message }); }
@@ -1167,7 +1171,7 @@ router.put('/customers/:id/segment', async (req, res) => {
       `UPDATE customers SET segment=COALESCE($1,segment), opted_in=COALESCE($2,opted_in) WHERE id=$3 RETURNING *`,
       [segment||null, opted_in??null, req.params.id]
     );
-    res.json({ customer: rows[0] });
+    res.json({ customer: rows[0] || null });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

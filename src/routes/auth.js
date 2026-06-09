@@ -175,12 +175,12 @@ router.post('/change-password', adminAuth, async (req, res) => {
   if (newPassword.length < 8)
     return res.status(400).json({ error: 'New password must be at least 8 characters' });
   try {
-    const { rows } = await query('SELECT * FROM admin_users WHERE id=$1', [req.user.id]);
+    const { rows } = await query('SELECT * FROM admin_users WHERE id=$1', [req.admin.id]);
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
     if (!verifyPassword(currentPassword, rows[0].password_hash))
       return res.status(401).json({ error: 'Current password is incorrect' });
     const hash = hashPassword(newPassword);
-    await query('UPDATE admin_users SET password_hash=$1 WHERE id=$2', [hash, req.user.id]);
+    await query('UPDATE admin_users SET password_hash=$1 WHERE id=$2', [hash, req.admin.id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

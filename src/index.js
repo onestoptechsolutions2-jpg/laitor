@@ -23,6 +23,8 @@ const session        = require('./services/session');
 const syncQueue      = require('./services/sync-queue');
 const cfgStore       = require('./services/config-store');
 const biSync         = require('./services/bidirectional-sync');
+const crm            = require('./services/crm');
+const managerSvc     = require('./services/manager');
 
 const webhookRouter  = require('./routes/webhook');
 const contactsRouter = require('./routes/contacts');
@@ -96,6 +98,16 @@ const start = async () => {
   try {
     await waitForDB();
     await cfgStore.seedDefaults();
+
+    // Register retry handlers so the queue worker can actually process items
+    syncQueue.registerHandler('crm', async (item) => {
+      const { phone, name } = item.payload;
+      await crm.upsertPerson({ phone, name });
+    });
+    syncQueue.registerHandler('manager', async (item) => {
+      const { phone, name } = item.payload;
+      await managerSvc.upsertCustomer({ phone, name });
+    });
 
     syncQueue.startWorker();
     logger.info('Sync-queue worker started');

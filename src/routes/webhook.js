@@ -45,7 +45,20 @@ const normalise = (body) => {
   }
 };
 
-router.post('/', async (req, res) => {
+// Validate Evolution API webhook signature when WEBHOOK_SECRET is set.
+// Evolution API sends the secret in the x-webhook-secret header (configurable).
+const validateSignature = (req, res, next) => {
+  const secret = process.env.WEBHOOK_SECRET;
+  if (!secret) return next();  // no secret configured → allow all (dev mode)
+  const incoming = req.headers['x-webhook-secret'] || req.headers['x-evolution-signature'];
+  if (!incoming || incoming !== secret) {
+    logger.warn('Webhook: invalid or missing signature', { ip: req.ip });
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+};
+
+router.post('/', validateSignature, async (req, res) => {
   res.status(200).json({ status: 'received' });
 
   const msg = normalise(req.body);

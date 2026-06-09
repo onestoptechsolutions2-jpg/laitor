@@ -470,6 +470,9 @@ const process = async (msg) => {
 
   const wantsMenu = /^(menu|hi|hello|hujambo|habari|start)$/i.test(text.trim());
 
+  // ── Load session early (needed for new-customer welcome check) ─────────────
+  const sess = await session.get(phone);
+
   // ── Upsert customer ────────────────────────────────────────────────────────
   let customer = { id: null, phone };
   try {
@@ -491,7 +494,8 @@ const process = async (msg) => {
          RETURNING *`,
         [phone, name || null]
       );
-      customer = res.rows[0];      if (!sess.welcomed) {
+      customer = res.rows[0];
+      if (!sess.welcomed) {
         const cfgStore = require('../services/config-store');
         const welcome  = await cfgStore.get('welcome_message').catch(() => null);
         if (welcome) await whatsapp.sendText(phone, welcome).catch(() => {});
@@ -502,7 +506,6 @@ const process = async (msg) => {
   }
 
   const consentStatus = customer.consent_status || 'pending';
-  const sess          = await session.get(phone);
 
   // ── CONSENT GATE (imported contacts only) ──────────────────────────────────
   if (consentStatus !== 'given') {
@@ -575,9 +578,9 @@ const process = async (msg) => {
       result = await handleQuotePending({ text, customer, phone, sess });
     } else if (currentState === STATES.MAIN_MENU) {
       // Intercept shop/cart intents before main menu handler
-      const shopTriggers = ['shop','shopping','marketplace','buy','store','browse catalog','cart','my cart','checkout','track order'];
+      const shopTriggers = ['shop','shopping','marketplace','buy','store','browse catalog','cart','my cart','checkout','track order','🛍️ shop'];
       const tLow = (text || '').toLowerCase().trim();
-      if (tLow === 'shop' || tLow === 'shopping' || tLow === 'marketplace' || tLow === '🛍️ shop') {
+      if (shopTriggers.includes(tLow) && tLow !== 'cart' && tLow !== 'my cart') {
         result = await handleShoppingMain();
       } else if (tLow === 'cart' || tLow === 'my cart' || tLow === '🛒' || tLow === 'view cart') {
         result = await handleShoppingCart({ customer, sess });
@@ -971,11 +974,12 @@ const handleCheckoutMpesa = async ({ text, customer, sess }) => {
 If you've already paid, reply:
 *PAID <M-Pesa code>*
 
-Example: _PAID QHJ7XY123Z_
-
-Or type *MENU* to go back.`,
+Example: _PAID QMD5JK2\`
+      `,
     }],
   };
 };
+
+// ─── Exports ──────────────────────────────────────────────────────────────────
 
 module.exports = { process, STATES };

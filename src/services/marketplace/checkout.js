@@ -87,13 +87,7 @@ const createOrder = async ({ customerId, deliveryAddress, paymentMethod, notes, 
   // Mark cart as checked out
   await cart.checkoutCart(summary.cart.id, customerId);
 
-  logger.info('checkout: order created', { orderId: order.id, orderNumber, customerId, total, paymentMethod });  supabaseSync.syncOrder(order, summary.items.map(i => ({
-    product_name: i.name,
-    qty:          i.qty,
-    unit_price:   i.unit_price,
-    cost_price:   i.cost_price || 0,
-    supplier_url: i.supplier_url || null,
-  }))).catch(() => {});
+  logger.info('checkout: order created', { orderId: order.id, orderNumber, customerId, total, paymentMethod });
 
   return order;
 };
