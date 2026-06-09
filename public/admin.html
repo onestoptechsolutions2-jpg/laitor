@@ -1533,6 +1533,7 @@ function nav(id, el) {
     commissions:    loadCommissions,
     deliveries:     loadDeliveries,
     suppliers:      loadSuppliers,
+    users:          loadUsers,
     tickets:    loadTickets,
     quotes:     loadQuotes,
     outreach:   loadPending,
@@ -2918,6 +2919,119 @@ async function doLogout() {
   showLogin();
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// USERS & ROLES
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadUsers() {
+  const r = await fetch('/auth/users', { credentials:'include' });
+  if (r.status === 403) {
+    document.getElementById('user-list').innerHTML =
+      '<p style="color:#888;font-size:13px;padding:10px">Only admins and managers can view users.</p>';
+    return;
+  }
+  const d = await r.json();
+  const roleBg  = { admin:'#ede9fe', manager:'#dbeafe', agent:'#f4f4f5' };
+  const roleCol = { admin:'#6d28d9', manager:'#1d4ed8', agent:'#52525b' };
+  const rows = (d.users||[]).map(u => `
+    <tr style="border-bottom:1px solid #f0f0f0">
+      <td style="padding:10px 14px;font-weight:600">${u.username}</td>
+      <td style="padding:10px 14px;color:#666">${u.email}</td>
+      <td style="padding:10px 14px">
+        <span style="padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;background:${roleBg[u.role]||'#f4f4f5'};color:${roleCol[u.role]||'#333'};text-transform:capitalize">${u.role}</span>
+      </td>
+      <td style="padding:10px 14px">
+        <span style="width:8px;height:8px;border-radius:50%;display:inline-block;background:${u.active?'#22c55e':'#d1d5db'};margin-right:6px"></span>
+        ${u.active ? 'Active' : 'Inactive'}
+      </td>
+      <td style="padding:10px 14px;color:#aaa;font-size:12px">${u.last_login ? new Date(u.last_login).toLocaleString() : 'Never'}</td>
+      <td style="padding:10px 14px">
+        <button class="btn btn-sm" onclick="toggleUser(${u.id}, ${u.active})">${u.active ? 'Deactivate' : 'Activate'}</button>
+        <button class="btn btn-sm" style="margin-left:6px" onclick="resetUserPassword(${u.id})">Reset PW</button>
+      </td>
+    </tr>`).join('');
+  document.getElementById('user-list').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:#f9f9f9">
+        ${['Username','Email','Role','Status','Last Login','Actions'].map(h=>`<th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;color:#666">${h}</th>`).join('')}
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function openUserForm() {
+  ['new-username','new-email','new-password'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('new-role').value = 'agent';
+  document.getElementById('user-modal').style.cssText = 'display:flex;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center';
+}
+function closeUserForm() { document.getElementById('user-modal').style.display = 'none'; }
+
+async function saveUser() {
+  const username = document.getElementById('new-username').value.trim();
+  const email    = document.getElementById('new-email').value.trim();
+  const password = document.getElementById('new-password').value;
+  const role     = document.getElementById('new-role').value;
+  if (!username||!email||!password) return alert('All fields required');
+  const r = await fetch('/auth/users', {
+    method:'POST', credentials:'include',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ username, email, password, role })
+  });
+  const d = await r.json();
+  if (!r.ok) return alert(d.error||'Failed to create user');
+  closeUserForm();
+  loadUsers();
+}
+
+async function toggleUser(id, currentlyActive) {
+  if (!confirm(`${currentlyActive ? 'Deactivate' : 'Activate'} this user?`)) return;
+  await fetch('/auth/users/'+id, {
+    method:'PUT', credentials:'include',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ active: !currentlyActive })
+  });
+  loadUsers();
+}
+
+async function resetUserPassword(id) {
+  const pw = prompt('Enter new password for this user (min 8 chars):');
+  if (!pw) return;
+  if (pw.length < 8) return alert('Password must be at least 8 characters');
+  const r = await fetch('/auth/users/'+id, {
+    method:'PUT', credentials:'include',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ password: pw })
+  });
+  const d = await r.json();
+  alert(r.ok ? 'Password reset successfully.' : (d.error||'Failed'));
+}
+
+async function changePassword() {
+  const current  = document.getElementById('pw-current').value;
+  const newPw    = document.getElementById('pw-new').value;
+  const confirm  = document.getElementById('pw-confirm').value;
+  const errEl    = document.getElementById('pw-error');
+  const okEl     = document.getElementById('pw-success');
+  errEl.style.display = 'none';
+  okEl.style.display  = 'none';
+  if (!current||!newPw) { errEl.textContent='All fields required'; errEl.style.display='block'; return; }
+  if (newPw !== confirm) { errEl.textContent='New passwords do not match'; errEl.style.display='block'; return; }
+  if (newPw.length < 8) { errEl.textContent='Password must be at least 8 characters'; errEl.style.display='block'; return; }
+  const r = await fetch('/auth/change-password', {
+    method:'POST', credentials:'include',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ currentPassword:current, newPassword:newPw })
+  });
+  const d = await r.json();
+  if (r.ok) {
+    okEl.style.display = 'block';
+    ['pw-current','pw-new','pw-confirm'].forEach(id => document.getElementById(id).value='');
+  } else {
+    errEl.textContent = d.error||'Failed to update password';
+    errEl.style.display = 'block';
+  }
+}
+
 </script>
 
 <!-- ── LOGIN OVERLAY ────────────────────────────────────────────────── -->
@@ -2936,6 +3050,55 @@ async function doLogout() {
     <label style="display:block;margin-bottom:6px;font-size:12px;font-weight:600;color:#555">Password</label>
     <input id="login-password" type="password" placeholder="••••••••" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:14px;margin-bottom:20px;outline:none;transition:border .2s" onfocus="this.style.borderColor='#006654'" onblur="this.style.borderColor='#e0e0e0'" onkeydown="if(event.key==='Enter')doLogin()">
     <button onclick="doLogin()" style="width:100%;padding:12px;background:linear-gradient(135deg,#006654,#00b894);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Sign In</button>
+    <button class="nav-link" onclick="nav('users',this)">
+      <span style="font-size:15px">🔑</span><span>Users &amp; Roles</span>
+    </button>
+  </div>
+</div>
+
+<!-- ── USERS & ROLES ──────────────────────────────────────────────────────── -->
+<section id="section-users" class="section" style="display:none">
+  <div class="section-header">
+    <div>
+      <h2 class="section-title">Users &amp; Roles</h2>
+      <p class="section-sub">Manage admin accounts and permissions</p>
+    </div>
+    <button class="btn btn-primary" onclick="openUserForm()">+ Add User</button>
+  </div>
+
+  <!-- Change own password card -->
+  <div style="background:#fff;border:1px solid #e8e8e8;border-radius:10px;padding:20px 24px;margin-bottom:20px;max-width:460px">
+    <h3 style="margin:0 0 14px;font-size:14px;font-weight:700;color:#1a1a1a">Change My Password</h3>
+    <div id="pw-success" style="display:none;background:#dcfce7;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#15803d">Password updated successfully.</div>
+    <div id="pw-error" style="display:none;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#dc2626"></div>
+    <input id="pw-current" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:13px;margin-bottom:10px">
+    <input id="pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:13px;margin-bottom:10px">
+    <input id="pw-confirm" type="password" placeholder="Confirm new password" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:13px;margin-bottom:12px">
+    <button class="btn btn-primary" onclick="changePassword()">Update Password</button>
+  </div>
+
+  <!-- User list -->
+  <div id="user-list" style="background:#fff;border:1px solid #e8e8e8;border-radius:10px;padding:20px;min-height:80px">
+    <p style="color:#aaa;font-size:13px">Loading...</p>
+  </div>
+</section>
+
+<!-- Add User modal -->
+<div id="user-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:12px;padding:28px 28px 24px;width:360px;box-shadow:0 8px 40px rgba(0,0,0,.14)">
+    <h3 style="margin:0 0 18px;font-size:15px;font-weight:700">Add User</h3>
+    <input id="new-username" type="text" placeholder="Username" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:13px;margin-bottom:10px">
+    <input id="new-email" type="email" placeholder="Email" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:13px;margin-bottom:10px">
+    <input id="new-password" type="password" placeholder="Password (min 8 chars)" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:13px;margin-bottom:10px">
+    <select id="new-role" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:13px;margin-bottom:16px">
+      <option value="agent">Agent</option>
+      <option value="manager">Manager</option>
+      <option value="admin">Admin</option>
+    </select>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn" onclick="closeUserForm()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveUser()">Create</button>
+    </div>
   </div>
 </div>
 </body>

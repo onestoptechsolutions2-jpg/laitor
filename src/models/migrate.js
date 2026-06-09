@@ -747,6 +747,44 @@ INSERT INTO outreach_config (id) VALUES (1) ON CONFLICT DO NOTHING;
 
 `;
 
+// ─── Password helpers (inlined — no external deps) ────────────────────────────
+const crypto = require('crypto');
+
+function hashPassword(plain) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(plain, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+// ─── Seed default admin user ───────────────────────────────────────────────────
+async function seedDefaultAdmin(client) {
+  const { rows } = await client.query(
+    `SELECT COUNT(*) AS n FROM admin_users WHERE role = 'admin'`
+  );
+  if (parseInt(rows[0].n) > 0) {
+    console.log('[migrate] Admin user already exists — skipping seed.');
+    return;
+  }
+
+  const username = process.env.ADMIN_DEFAULT_USERNAME || 'admin';
+  const email    = process.env.ADMIN_DEFAULT_EMAIL    || 'admin@laitor.co';
+  const password = process.env.ADMIN_DEFAULT_PASSWORD || 'Laitor@2024';
+  const hash     = hashPassword(password);
+
+  await client.query(
+    `INSERT INTO admin_users (username, email, password_hash, role)
+     VALUES ($1, $2, $3, 'admin')
+     ON CONFLICT DO NOTHING`,
+    [username, email, hash]
+  );
+
+  console.log('[migrate] ✓ Default admin created.');
+  console.log(`[migrate]   Username : ${username}`);
+  console.log(`[migrate]   Email    : ${email}`);
+  console.log(`[migrate]   Password : ${password}`);
+  console.log('[migrate]   ⚠  Change this password immediately after first login!');
+}
+
 (async () => {
   let client;
   try {
@@ -754,6 +792,7 @@ INSERT INTO outreach_config (id) VALUES (1) ON CONFLICT DO NOTHING;
     console.log('[migrate] Connected. Applying schema...');
     await client.query(schema);
     console.log('[migrate] Schema applied successfully.');
+    await seedDefaultAdmin(client);
   } catch (err) {
     console.error('[migrate] FAILED:', err.message);
     console.error('[migrate] Code   :', err.code);

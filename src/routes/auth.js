@@ -166,4 +166,46 @@ router.get('/users', adminAuth, requireRole('admin', 'manager'), async (req, res
   }
 });
 
+
+/* ── Change own password ──────────────────────────────────────────────────── */
+router.post('/change-password', adminAuth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword)
+    return res.status(400).json({ error: 'currentPassword and newPassword required' });
+  if (newPassword.length < 8)
+    return res.status(400).json({ error: 'New password must be at least 8 characters' });
+  try {
+    const { rows } = await query('SELECT * FROM admin_users WHERE id=$1', [req.user.id]);
+    if (!rows.length) return res.status(404).json({ error: 'User not found' });
+    if (!verifyPassword(currentPassword, rows[0].password_hash))
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    const hash = hashPassword(newPassword);
+    await query('UPDATE admin_users SET password_hash=$1 WHERE id=$2', [hash, req.user.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ── Admin: update any user ───────────────────────────────────────────────── */
+router.put('/users/:id', adminAuth, requireRole('admin'), async (req, res) => {
+  const { role, active, password } = req.body;
+  const updates = [];
+  const vals    = [];
+  if (role)              { updates.push(`role=$${vals.push(role)}`); }
+  if (active !== undefined) { updates.push(`active=$${vals.push(active)}`); }
+  if (password) {
+    if (password.length < 8) return res.status(400).json({ error: 'Password too short' });
+    updates.push(`password_hash=$${vals.push(hashPassword(password))}`);
+  }
+  if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
+  vals.push(req.params.id);
+  try {
+    await query(`UPDATE admin_users SET ${updates.join(',')} WHERE id=$${vals.length}`, vals);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = { router, adminAuth, requireRole };
