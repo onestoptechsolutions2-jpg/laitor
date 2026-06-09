@@ -50,9 +50,12 @@ const getCatalog = async () => {
     if (items.length > 0) {
       // Upsert into catalog_cache
       for (const item of items) {
-        const name = item.ItemName || item.Name || item.name || '';
-        const desc = item.Description || item.description || '';
-        const price = parseFloat(item.SalesPrice || item.Price || item.price || 0) || 0;
+        // Manager.io list API uses camelCase: itemName, averageCost
+        const name  = item.itemName || item.ItemName || item.Name || item.name || '';
+        const desc  = item.description || item.Description || '';
+        const price = parseFloat(
+          item.averageCost ?? item.SalesPrice ?? item.Price ?? item.price ?? 0
+        ) || 0;
         const type  = classifyType(name, desc);
         const key   = (item.key || item.ItemCode || name).toString().toLowerCase().replace(/\s+/g, '-').substring(0, 100);
 

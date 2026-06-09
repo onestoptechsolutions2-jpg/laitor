@@ -69,9 +69,10 @@ const upsertCustomer = async ({ phone, name }) => {
   if (!isConfigured()) return null;
 
   try {
-    // GET /customers = read-only list endpoint (no -form suffix)
+    // GET /customers = read-only list endpoint
+    // Response: { customers: [...], totalRecords: N } or plain array
     const res       = await client().get('/customers');
-    const customers = Array.isArray(res.data) ? res.data : [];
+    const customers = Array.isArray(res.data) ? res.data : (res.data.customers || []);
 
     const existing = customers.find(
       (c) =>
@@ -239,9 +240,10 @@ const getInventoryItems = async () => {
   if (!isConfigured()) return [];
 
   try {
-    // GET /inventory-items = read-only list endpoint (no -form suffix)
+    // GET /inventory-items = read-only list endpoint
+    // Response: { inventoryItems: [...], totalRecords: N } or plain array
     const res  = await client().get('/inventory-items');
-    const data = Array.isArray(res.data) ? res.data : [];
+    const data = Array.isArray(res.data) ? res.data : (res.data.inventoryItems || []);
     logger.info('Manager: inventory fetched', { count: data.length });
     return data;
   } catch (err) {
