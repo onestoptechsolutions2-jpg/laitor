@@ -507,7 +507,7 @@ function nav(page,btn){
   document.querySelectorAll(".ni").forEach(n=>n.classList.remove("on"));
   const s=document.getElementById("pg-"+page);if(s)s.classList.add("on");
   if(btn)btn.classList.add("on");
-  else{const b=document.querySelector(".ni[onclick*="\'"+page+"\'"]");if(b)b.classList.add("on");}
+  else{document.querySelectorAll(".ni").forEach(function(n){if((n.getAttribute("onclick")||"").indexOf(page)>-1)n.classList.add("on");});}
   g("tb-t").textContent=PT[page]||page;
   closeSb();
   if(LD[page])LD[page]();
