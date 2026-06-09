@@ -819,11 +819,15 @@ let _msgs={};
 async function ldBot(){
   const d=await api("GET","content/messages");
   _msgs={};const el=g("msg-f");el.innerHTML="";
-  (d.messages||[]).forEach(m=>{
-    _msgs[m.key]=m.value;
-    el.innerHTML+="<div class=\"card\" style=\"margin-bottom:10px\"><div class=\"ch\"><span class=\"ct2\">"+m.key+"</span><span style=\"font-size:11px;color:var(--txt2)\">"+(m.description||"")+"</span></div><div class=\"cb\"><textarea class=\"fta\" id=\"ms-"+m.key+"\" style=\"min-height:60px\">"+(m.value||"")+"</textarea></div></div>";
+  // API returns {messages: {key: value}, defaults: {...}}
+  const msgs=d.messages||{};
+  const entries=Object.keys(msgs);
+  entries.forEach(k=>{
+    const v=msgs[k];
+    _msgs[k]=v;
+    el.innerHTML+="<div class=\"card\" style=\"margin-bottom:10px\"><div class=\"ch\"><span class=\"ct2\">"+k+"</span></div><div class=\"cb\"><textarea class=\"fta\" id=\"ms-"+k+"\" style=\"min-height:60px\">"+(v||"")+"</textarea></div></div>";
   });
-  if(!d.messages?.length)el.innerHTML="<p style=\"color:var(--txt2)\">No message templates configured.</p>";
+  if(!entries.length)el.innerHTML="<p style=\"color:var(--txt2)\">No message templates configured.</p>";
   ldMI();
 }
 async function saveMsgs(){

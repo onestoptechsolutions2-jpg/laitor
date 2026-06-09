@@ -1034,7 +1034,7 @@ router.get('/broadcasts', async (req, res) => {
   try {
     const limit  = parseInt(req.query.limit) || 30;
     const offset = (parseInt(req.query.page) - 1 || 0) * limit;
-    const { rows } = await db.query(`
+    const { rows } = await query(`
       SELECT b.*, c.name AS campaign_name,
              (SELECT COUNT(*) FROM broadcast_recipients br WHERE br.broadcast_id=b.id AND br.status='sent') AS delivered
       FROM broadcasts b LEFT JOIN campaigns c ON c.id=b.campaign_id
@@ -1046,7 +1046,7 @@ router.get('/broadcasts', async (req, res) => {
 
 router.get('/broadcasts/:id/recipients', async (req, res) => {
   try {
-    const { rows } = await db.query(
+    const { rows } = await query(
       `SELECT br.*, cu.name AS customer_name FROM broadcast_recipients br
        LEFT JOIN customers cu ON cu.id=br.customer_id
        WHERE br.broadcast_id=$1 ORDER BY br.sent_at DESC NULLS LAST LIMIT 200`,
@@ -1148,7 +1148,7 @@ router.post('/customers/import', async (req, res) => {
       let phone = String(r.phone).replace(/[\s\-().]/g, '');
       if (/^0[17]\d{8}$/.test(phone)) phone = '254' + phone.slice(1);
       if (/^254\d{9}$/.test(phone))   phone = phone;
-      await db.query(
+      await query(
         `INSERT INTO customers (phone, name, location, segment, source, consent_status, opted_in)
          VALUES ($1,$2,$3,$4,'import','pending',false)
          ON CONFLICT (phone) DO UPDATE SET
@@ -1167,7 +1167,7 @@ router.post('/customers/import', async (req, res) => {
 router.put('/customers/:id/segment', async (req, res) => {
   try {
     const { segment, opted_in } = req.body;
-    const { rows } = await db.query(
+    const { rows } = await query(
       `UPDATE customers SET segment=COALESCE($1,segment), opted_in=COALESCE($2,opted_in) WHERE id=$3 RETURNING *`,
       [segment||null, opted_in??null, req.params.id]
     );
