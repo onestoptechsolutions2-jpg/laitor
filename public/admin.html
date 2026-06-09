@@ -554,7 +554,7 @@ async function ldDash(){
   g("d-le").textContent=fmt(d.leads||d.active_leads||0);
   g("d-or").textContent=fmt(d.orders||d.open_orders||0);
   g("d-ti").textContent=fmt(d.tickets||d.open_tickets||0);
-  g("d-rv").textContent="KES "+fmt(d.revenue||d.revenue_30d||0);
+  g("d-rv").textContent="KES "+fmt(d.revenue30d||d.revenue_30d||d.revenue||0);
   const r2=await api("GET","customers?limit=8");
   const rows=(r2.customers||[]).map(c=>[
     "<strong>"+(c.name||c.phone)+"</strong><div style=\"font-size:11px;color:var(--txt2)\">"+c.phone+"</div>",

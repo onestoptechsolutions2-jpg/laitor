@@ -59,12 +59,16 @@ router.use(adminAuth);
 
 router.get('/stats', async (_req, res) => {
   try {
-    const [customers, leads, orders, tickets, consented] = await Promise.all([
+    const [customers, leads, orders, tickets, consented, revenue] = await Promise.all([
       query(`SELECT COUNT(*) FROM customers`),
       query(`SELECT COUNT(*) FROM leads`),
       query(`SELECT COUNT(*) FROM orders WHERE status NOT IN ('cancelled')`),
       query(`SELECT COUNT(*) FROM tickets WHERE status NOT IN ('resolved','closed')`),
       query(`SELECT COUNT(*) FROM customers WHERE consent_status = 'given'`),
+      query(`SELECT COALESCE(SUM(total),0) AS revenue
+             FROM marketplace_orders
+             WHERE status NOT IN ('cancelled','refunded')
+               AND created_at >= NOW() - INTERVAL '30 days'`).catch(() => ({ rows: [{ revenue: 0 }] })),
     ]);
 
     const bySource = await query(
@@ -83,6 +87,7 @@ router.get('/stats', async (_req, res) => {
       openOrders:  parseInt(orders.rows[0].count),
       openTickets: parseInt(tickets.rows[0].count),
       consented:   parseInt(consented.rows[0].count),
+      revenue30d:  parseFloat(revenue.rows[0].revenue) || 0,
       bySource:    bySource.rows,
       recentLeads: recentLeads.rows,
       syncQueue:   queueStats,

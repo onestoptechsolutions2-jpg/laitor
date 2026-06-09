@@ -4,6 +4,20 @@ const express      = require('express');
 const orchestrator = require('../orchestrator');
 const logger       = require('../utils/logger');
 
+/**
+ * Normalise any Kenya phone format to 254XXXXXXXXX.
+ * Handles: 0712345678, 712345678, 254712345678, +254712345678
+ * Returns null for unrecognisable numbers.
+ */
+const normalisePhone = (p) => {
+  if (!p) return null;
+  p = String(p).replace(/\D/g, '');           // strip non-digits
+  if (p.startsWith('254') && p.length === 12) return p;
+  if (p.startsWith('0')   && p.length === 10) return '254' + p.slice(1);
+  if (p.length === 9)                          return '254' + p;
+  return p.length >= 10 ? p : null;           // pass through other valid numbers
+};
+
 const router = express.Router();
 
 /**
@@ -20,7 +34,10 @@ const normalise = (body) => {
     if (key.fromMe === true)             return null;
     if (body.event !== 'messages.upsert') return null;
 
-    const phone = key.remoteJid?.replace('@s.whatsapp.net', '');
+    const raw = key.remoteJid?.replace('@s.whatsapp.net', '');
+    if (!raw) return null;
+    // Normalise to E.164 Kenya format: always 254XXXXXXXXX
+    const phone = normalisePhone(raw);
     if (!phone) return null;
 
     // Extract text — try all known message types
