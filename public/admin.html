@@ -1837,4 +1837,11 @@ async function runDiagnostics() {
         </div>
       `;
     }).join('');
-  } catch(e) 
+  } catch(e) {
+    document.getElementById('diag-results').innerHTML = '<div style="color:var(--red);padding:20px">Error: ' + escHtml(e.message) + '</div>';
+  }
+  btn.disabled = false; btn.textContent = '▶ Run Tests';
+}
+</script>
+</body>
+</html>
