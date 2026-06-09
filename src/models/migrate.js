@@ -4,18 +4,6 @@
  * Database migration script.
  * Runs on every container start via docker-entrypoint.sh.
  * All statements use CREATE/ALTER IF NOT EXISTS — safe to re-run.
- *
- * Tables:
- *   customers      — contact records (WhatsApp, import, web)
- *   leads          — sales pipeline entries
- *   orders         — product/service orders
- *   tickets        — support tickets
- *   messages       — full in/out message log
- *   catalog_cache  — local copy of Manager.io inventory + manual items
- *   agents         — team members assigned to categories (internet/products/support/finance)
- *   categories     — product/service categories with Manager.io group mapping
- *   quotes         — customer quotes pending approval
- *   sync_queue     — retry queue for failed CRM/finance pushes
  */
 
 const { Pool } = require('pg');
@@ -139,21 +127,21 @@ CREATE TABLE IF NOT EXISTS categories (
 
 /* ── Quotes awaiting customer approval ── */
 CREATE TABLE IF NOT EXISTS quotes (
-  id            SERIAL PRIMARY KEY,
-  customer_id   INT REFERENCES customers(id),
-  order_id      INT REFERENCES orders(id),
+  id                 SERIAL PRIMARY KEY,
+  customer_id        INT REFERENCES customers(id),
+  order_id           INT REFERENCES orders(id),
   manager_quote_ref  VARCHAR(255),
-  status        VARCHAR(50)   DEFAULT 'draft',
-  items         JSONB         NOT NULL DEFAULT '[]',
-  total_amount  DECIMAL(10,2) DEFAULT 0,
-  currency      VARCHAR(10)   DEFAULT 'KES',
-  notes         TEXT,
-  sent_at       TIMESTAMPTZ,
-  approved_at   TIMESTAMPTZ,
-  declined_at   TIMESTAMPTZ,
-  expires_at    TIMESTAMPTZ,
-  created_at    TIMESTAMPTZ DEFAULT NOW(),
-  updated_at    TIMESTAMPTZ DEFAULT NOW()
+  status             VARCHAR(50)   DEFAULT 'draft',
+  items              JSONB         NOT NULL DEFAULT '[]',
+  total_amount       DECIMAL(10,2) DEFAULT 0,
+  currency           VARCHAR(10)   DEFAULT 'KES',
+  notes              TEXT,
+  sent_at            TIMESTAMPTZ,
+  approved_at        TIMESTAMPTZ,
+  declined_at        TIMESTAMPTZ,
+  expires_at         TIMESTAMPTZ,
+  created_at         TIMESTAMPTZ DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
 /* ── Sync retry queue (failed CRM / Manager.io pushes) ── */
@@ -170,20 +158,6 @@ CREATE TABLE IF NOT EXISTS sync_queue (
   created_at    TIMESTAMPTZ  DEFAULT NOW(),
   updated_at    TIMESTAMPTZ  DEFAULT NOW()
 );
-
-/* ── Safe column additions for existing installs ── */
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS consent_status  VARCHAR(20)  DEFAULT 'pending';
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS consented_at    TIMESTAMPTZ;
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS source          VARCHAR(50)  DEFAULT 'inbound';
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS cluster         VARCHAR(255);
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS territory       VARCHAR(255);
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS service_tag     VARCHAR(255);
-ALTER TABLE customers ADD COLUMN IF NOT EXISTS manager_key     VARCHAR(255);
-ALTER TABLE orders    ADD COLUMN IF NOT EXISTS invoice_ref     VARCHAR(255);
-ALTER TABLE orders    ADD COLUMN IF NOT EXISTS quote_id        INT;
-ALTER TABLE tickets   ADD COLUMN IF NOT EXISTS agent_id        INT;
-ALTER TABLE catalog_cache ADD COLUMN IF NOT EXISTS category_id INT;
-
 
 /* ── Bot configuration (editable from admin dashboard) ── */
 CREATE TABLE IF NOT EXISTS bot_config (
@@ -204,6 +178,20 @@ CREATE TABLE IF NOT EXISTS menu_items (
   active        BOOLEAN      DEFAULT true,
   created_at    TIMESTAMPTZ  DEFAULT NOW()
 );
+
+/* ── Safe column additions for existing installs ── */
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS consent_status  VARCHAR(20)  DEFAULT 'pending';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS consented_at    TIMESTAMPTZ;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS source          VARCHAR(50)  DEFAULT 'inbound';
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS cluster         VARCHAR(255);
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS territory       VARCHAR(255);
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS service_tag     VARCHAR(255);
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS crm_id          VARCHAR(255);
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS manager_key     VARCHAR(255);
+ALTER TABLE orders    ADD COLUMN IF NOT EXISTS invoice_ref      VARCHAR(255);
+ALTER TABLE orders    ADD COLUMN IF NOT EXISTS quote_id         INT;
+ALTER TABLE tickets   ADD COLUMN IF NOT EXISTS agent_id         INT;
+ALTER TABLE catalog_cache ADD COLUMN IF NOT EXISTS category_id  INT;
 
 /* ── Seed default menu items ── */
 INSERT INTO menu_items (label, description, icon, action, display_order) VALUES

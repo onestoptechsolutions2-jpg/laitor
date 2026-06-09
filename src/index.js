@@ -8,14 +8,8 @@
  *   1. Wait for database (retry loop, 10 x 3s)
  *   2. Seed bot config defaults
  *   3. Start sync-queue retry worker
- *   4. Start bidirectional sync worker (Twenty CRM <-> Manager.io)
+ *   4. Start bidirectional sync worker (Twenty CRM <-> Manager.io) -- non-fatal
  *   5. Start HTTP server
- *
- * Shutdown sequence (SIGTERM / SIGINT):
- *   1. Close PostgreSQL pool
- *   2. Disconnect Redis
- *   3. Stop sync-queue worker
- *   4. Exit cleanly
  */
 
 require('dotenv').config();
@@ -81,8 +75,8 @@ app.use((err, _req, res, _next) => {
 // ---- Startup -----------------------------------------------------------------
 
 const waitForDB = async (retries, delayMs) => {
-  retries  = retries  || 10;
-  delayMs  = delayMs  || 3000;
+  retries = retries || 10;
+  delayMs = delayMs || 3000;
   for (var i = 1; i <= retries; i++) {
     try {
       await pool.query('SELECT 1');
@@ -100,10 +94,18 @@ const start = async () => {
   try {
     await waitForDB();
     await cfgStore.seedDefaults();
+
     syncQueue.startWorker();
     logger.info('Sync-queue worker started');
-    await biSync.startWorker();
-    logger.info('Bidirectional sync worker initialised');
+
+    // Non-fatal: sync worker failure must not prevent server from starting
+    try {
+      await biSync.startWorker();
+      logger.info('Bidirectional sync worker initialised');
+    } catch (syncErr) {
+      logger.warn('Bidirectional sync worker failed to start (non-fatal)', { error: syncErr.message });
+    }
+
     app.listen(config.server.port, () => {
       logger.info('Laitor WhatsApp Engine started', {
         port: config.server.port,
