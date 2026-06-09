@@ -526,6 +526,10 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
       Content & Flows
     </button>
+    <button class="nav-link" onclick="nav('sync',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+      Sync Settings
+    </button>
     <button class="nav-link" onclick="nav('diagnostics',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
       Diagnostics
@@ -1040,7 +1044,70 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
       </div>
     </section>
 
-    <!-- ════════ DIAGNOSTICS ════════ -->
+    <!-- ════════ SYNC ════════ -->
+    <section id="sync" class="section">
+      <div class="topbar">
+        <div class="topbar-left"><button class="hamburger" onclick="openSidebar()">☰</button><h1>Sync Settings</h1></div>
+        <div class="topbar-actions">
+          <button class="btn btn-outline btn-sm" onclick="syncCrm()" title="Push unsynced contacts to Twenty CRM">↑ CRM Only</button>
+          <button class="btn btn-primary btn-sm" onclick="runFullSync()" id="sync-run-btn">⟳ Sync Now</button>
+        </div>
+      </div>
+      <div class="content">
+
+        <!-- Last run status -->
+        <div class="card" style="margin-bottom:16px" id="sync-status-card">
+          <div class="card-header"><strong>Last Sync Run</strong></div>
+          <div class="card-body" id="sync-status-body" style="font-size:13px;color:var(--muted)">
+            Loading…
+          </div>
+        </div>
+
+        <!-- Auto-sync config -->
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-header"><strong>Auto-Sync Schedule</strong></div>
+          <div class="card-body">
+            <div class="alert alert-info" style="margin-bottom:12px;font-size:13px">
+              Bidirectional: Local DB ↔ Twenty CRM ↔ Manager.io.
+              Phone is the universal match key. Set an interval to sync automatically.
+            </div>
+            <div class="form-row" style="gap:12px;align-items:flex-end;flex-wrap:wrap">
+              <div class="form-group" style="flex:0 0 auto">
+                <label class="form-label">Enable Auto-Sync</label>
+                <select id="sync-enabled" class="form-control" style="width:120px">
+                  <option value="false">Disabled</option>
+                  <option value="true">Enabled</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex:0 0 auto">
+                <label class="form-label">Interval</label>
+                <select id="sync-interval" class="form-control" style="width:150px">
+                  <option value="0">Manual only</option>
+                  <option value="15">Every 15 min</option>
+                  <option value="30">Every 30 min</option>
+                  <option value="60">Every hour</option>
+                  <option value="360">Every 6 hours</option>
+                  <option value="1440">Daily</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex:0 0 auto">
+                <label class="form-label">&nbsp;</label>
+                <button class="btn btn-primary" onclick="saveSyncConfig()">Save Schedule</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Phase breakdown -->
+        <div class="card" id="sync-phases-card" style="display:none">
+          <div class="card-header"><strong>Last Run Detail</strong></div>
+          <div class="card-body" id="sync-phases-body" style="font-size:13px"></div>
+        </div>
+
+      </div>
+    </section>
+
+        <!-- ════════ DIAGNOSTICS ════════ -->
     <section id="diagnostics" class="section">
       <div class="topbar">
         <div class="topbar-left"><button class="hamburger" onclick="openSidebar()">☰</button><h1>System Diagnostics</h1></div>
@@ -1104,6 +1171,7 @@ function nav(id, el) {
     agents:     loadAgents,
     categories: loadCategories,
     content:    loadContent,
+    sync:       loadSync,
   };
   if (loaders[id]) loaders[id]();
 }
@@ -1656,6 +1724,75 @@ async function deleteMenuItem(id) {
   loadMenuItems(); toast('Deleted');
 }
 
+// ── Sync ─────────────────────────────────────────────────────────────────────
+async function loadSync() {
+  try {
+    const d = await fetch(API + '/api/v1/sync/status').then(r => r.json());
+    document.getElementById('sync-enabled').value  = d.enabled ? 'true' : 'false';
+    const sel = document.getElementById('sync-interval');
+    const opts = ['0','15','30','60','360','1440'];
+    const iv   = String(d.intervalMin || 0);
+    sel.value  = opts.includes(iv) ? iv : '0';
+
+    const body = document.getElementById('sync-status-body');
+    if (!d.lastRun) {
+      body.innerHTML = '<span style="color:var(--muted)">No sync run yet.</span>';
+    } else {
+      const s = d.lastStats || {};
+      body.innerHTML = `
+        <div>Last run: <strong>${fmtDate(d.lastRun)}</strong>
+          (${s.durationMs != null ? (s.durationMs/1000).toFixed(1)+'s' : '?'})</div>
+        <div style="margin-top:6px;display:flex;gap:16px;flex-wrap:wrap">
+          <span>📤 Local→CRM: <strong>${s.localToCrm||0}</strong></span>
+          <span>📤 Local→Manager: <strong>${s.localToManager||0}</strong></span>
+          <span>📥 CRM→Local: <strong>${s.crmToLocal||0}</strong></span>
+          <span>📥 Manager→Local: <strong>${s.managerToLocal||0}</strong></span>
+          ${(s.errors||[]).length ? `<span style="color:var(--red)">⚠ ${s.errors.length} error(s)</span>` : ''}
+        </div>`;
+    }
+
+    const phases = document.getElementById('sync-phases-card');
+    const pbody  = document.getElementById('sync-phases-body');
+    if (d.lastStats && d.lastStats.errors && d.lastStats.errors.length) {
+      phases.style.display = '';
+      pbody.innerHTML = '<strong style="color:var(--red)">Errors:</strong><br>' +
+        d.lastStats.errors.map(e =>
+          `<div style="color:var(--muted);margin-top:4px">[${e.phase}] ${e.phone||''} — ${e.error}</div>`
+        ).join('');
+    } else {
+      phases.style.display = 'none';
+    }
+  } catch (e) { console.error('loadSync', e); }
+}
+
+async function runFullSync() {
+  const btn = document.getElementById('sync-run-btn');
+  btn.disabled = true; btn.textContent = '⏳ Syncing…';
+  try {
+    toast('Running full bidirectional sync…');
+    const d = await fetch(API + '/api/v1/sync/all', { method: 'POST' }).then(r => r.json());
+    if (d.error) { toast('Sync error: ' + d.error, true); return; }
+    const s = d.stats || {};
+    toast(`Sync done — CRM: ${s.localToCrm||0}↑ ${s.crmToLocal||0}↓ · Manager: ${s.localToManager||0}↑ ${s.managerToLocal||0}↓`);
+    loadSync();
+  } catch (e) { toast('Sync failed: ' + e.message, true); }
+  finally { btn.disabled = false; btn.textContent = '⟳ Sync Now'; }
+}
+
+async function saveSyncConfig() {
+  const enabled     = document.getElementById('sync-enabled').value === 'true';
+  const intervalMin = parseInt(document.getElementById('sync-interval').value, 10);
+  try {
+    const d = await fetch(API + '/api/v1/sync/config', {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ enabled, intervalMin }),
+    }).then(r => r.json());
+    if (d.error) { toast('Save failed: ' + d.error, true); return; }
+    toast('Sync schedule saved' + (enabled && intervalMin ? ` — runs every ${intervalMin} min` : ' — manual only'));
+  } catch (e) { toast('Save failed: ' + e.message, true); }
+}
+
 // ── Diagnostics ──────────────────────────────────────────────────────────────
 async function runDiagnostics() {
   const btn = document.getElementById('diag-btn');
@@ -1700,14 +1837,4 @@ async function runDiagnostics() {
         </div>
       `;
     }).join('');
-  } catch(e) { document.getElementById('diag-results').innerHTML = `<div class="alert alert-error">Failed to reach server: ${e.message}</div>`; }
-  btn.disabled = false; btn.textContent = '▶ Run Tests';
-}
-
-// ── Init ──────────────────────────────────────────────────────────────────────
-loadDashboard();
-// Pre-load quote item row on first open
-document.getElementById('q-items-list') && addQuoteItem();
-</script>
-</body>
-</html>
+  } catch(e) 

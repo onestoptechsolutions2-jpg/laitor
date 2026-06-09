@@ -79,6 +79,12 @@ const DEFAULTS = {
   business_phone:  '0700 000 000',
   business_email:  'support@laitor.co.ke',
   business_hours:  'Mon–Fri 8am–6pm · Sat 9am–1pm',
+
+  // ── Bidirectional sync ──
+  sync_enabled:       'false',   // 'true' | 'false'
+  sync_interval_min:  '0',       // 0 = manual only; 15 | 30 | 60 | 360 | 1440
+  sync_last_run:      '',        // ISO timestamp, updated after each run
+  sync_last_stats:    '',        // JSON string of last run stats
 };
 
 // ── In-memory cache ───────────────────────────────────────────────────────────

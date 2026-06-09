@@ -29,6 +29,9 @@
  *   POST /quotes                 — create + send quote to customer
  *   GET  /sync-queue             — sync queue stats
  *   POST /sync/crm               — bulk push unsynced customers to Twenty CRM
+ *   POST /sync/all               — full bidirectional sync (CRM <-> Manager.io)
+ *   GET  /sync/status            — last sync run info + interval config
+ *   PUT  /sync/config            — update sync enabled + interval
  */
 
 const express  = require('express');
@@ -39,6 +42,7 @@ const outreach = require('../services/outreach');
 const agentSvc = require('../services/agents');
 const quoteSvc = require('../services/quote');
 const syncQ    = require('../services/sync-queue');
+const biSync   = require('../services/bidirectional-sync');
 const whatsapp = require('../services/whatsapp');
 const cfgStore = require('../services/config-store');
 const config   = require('../config');
@@ -439,6 +443,69 @@ router.post('/sync/crm', async (_req, res) => {
 
     logger.info('CRM bulk sync complete', results);
     return res.json({ success: true, total: unsynced.rows.length, ...results });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Bidirectional Sync ────────────────────────────────────────────────────────
+
+/**
+ * POST /sync/all
+ * Trigger a full bidirectional sync (Twenty CRM <-> Manager.io <-> Local DB).
+ * Safe to call manually at any time.
+ */
+router.post('/sync/all', async (_req, res) => {
+  try {
+    const stats = await biSync.runSync();
+    return res.json({ success: true, stats });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /sync/status
+ * Return last sync run time + stats + current interval config.
+ */
+router.get('/sync/status', async (_req, res) => {
+  try {
+    const lastRun     = await cfgStore.get('sync_last_run',    '');
+    const lastStats   = await cfgStore.get('sync_last_stats',  '{}');
+    const enabled     = await cfgStore.get('sync_enabled',     'false');
+    const intervalMin = await cfgStore.get('sync_interval_min','0');
+
+    let parsedStats = null;
+    try { parsedStats = lastStats ? JSON.parse(lastStats) : null; } catch (_) {}
+
+    return res.json({
+      enabled:     enabled === 'true',
+      intervalMin: parseInt(intervalMin, 10) || 0,
+      lastRun:     lastRun || null,
+      lastStats:   parsedStats,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /sync/config
+ * Update sync enabled flag and/or interval.
+ * Body: { enabled: boolean, intervalMin: number }
+ * Restarts the background worker with new settings.
+ */
+router.put('/sync/config', async (req, res) => {
+  try {
+    const { enabled, intervalMin } = req.body || {};
+    const updates = {};
+    if (enabled !== undefined)     updates.sync_enabled      = String(!!enabled);
+    if (intervalMin !== undefined) updates.sync_interval_min = String(parseInt(intervalMin, 10) || 0);
+
+    await cfgStore.setMany(updates);
+    await biSync.startWorker(); // restart worker with new config
+
+    return res.json({ success: true, applied: updates });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

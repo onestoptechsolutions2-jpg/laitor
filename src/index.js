@@ -8,7 +8,8 @@
  *   1. Wait for database (retry loop, 10 x 3s)
  *   2. Seed bot config defaults
  *   3. Start sync-queue retry worker
- *   4. Start HTTP server
+ *   4. Start bidirectional sync worker (Twenty CRM <-> Manager.io)
+ *   5. Start HTTP server
  *
  * Shutdown sequence (SIGTERM / SIGINT):
  *   1. Close PostgreSQL pool
@@ -27,6 +28,7 @@ const { pool }       = require('./models/db');
 const session        = require('./services/session');
 const syncQueue      = require('./services/sync-queue');
 const cfgStore       = require('./services/config-store');
+const biSync         = require('./services/bidirectional-sync');
 
 const webhookRouter  = require('./routes/webhook');
 const contactsRouter = require('./routes/contacts');
@@ -100,6 +102,8 @@ const start = async () => {
     await cfgStore.seedDefaults();
     syncQueue.startWorker();
     logger.info('Sync-queue worker started');
+    await biSync.startWorker();
+    logger.info('Bidirectional sync worker initialised');
     app.listen(config.server.port, () => {
       logger.info('Laitor WhatsApp Engine started', {
         port: config.server.port,

@@ -247,7 +247,6 @@ const getInventoryItems = async () => {
     logger.info('Manager: inventory fetched', { count: data.length });
     return data;
   } catch (err) {
-    
     logger.warn('Manager: getInventoryItems failed (non-fatal)', { error: err.message });
     return [];
   }
@@ -255,6 +254,7 @@ const getInventoryItems = async () => {
 
 module.exports = {
   isConfigured,
+  client,          // exported so bidirectional-sync can make paginated calls
   upsertCustomer,
   createQuote,
   convertQuoteToInvoice,
