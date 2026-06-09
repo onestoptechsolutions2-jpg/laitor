@@ -592,6 +592,7 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
             <option value="given">Consented</option>
             <option value="denied">Opted out</option>
           </select>
+          <button class="btn btn-outline btn-sm" onclick="syncCrm()" title="Push unsynced contacts to Twenty CRM">↑ Sync CRM</button>
           <label class="btn btn-primary btn-sm" style="cursor:pointer">
             📂 Import
             <input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importContacts(this)">
@@ -1179,6 +1180,16 @@ async function loadDashboard() {
 }
 
 // ── Contacts ──────────────────────────────────────────────────────────────────
+async function syncCrm() {
+  try {
+    toast('Syncing contacts to Twenty CRM…');
+    const d = await fetch(API + '/api/v1/sync/crm', { method: 'POST' }).then(r => r.json());
+    if (d.error) { toast('CRM sync error: ' + d.error, true); return; }
+    toast(`CRM sync done — ${d.synced} synced, ${d.failed} failed, ${d.skipped} skipped`);
+    loadContacts();
+  } catch (e) { toast('CRM sync failed: ' + e.message, true); }
+}
+
 async function loadContacts(reset) {
   if (reset) _contactOffset = 0;
   try {

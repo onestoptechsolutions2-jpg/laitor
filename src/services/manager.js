@@ -247,6 +247,7 @@ const getInventoryItems = async () => {
     logger.info('Manager: inventory fetched', { count: data.length });
     return data;
   } catch (err) {
+    
     logger.warn('Manager: getInventoryItems failed (non-fatal)', { error: err.message });
     return [];
   }

@@ -28,17 +28,20 @@
  *   GET  /quotes                 — list quotes (paginated)
  *   POST /quotes                 — create + send quote to customer
  *   GET  /sync-queue             — sync queue stats
+ *   POST /sync/crm               — bulk push unsynced customers to Twenty CRM
  */
 
 const express  = require('express');
 const { query } = require('../models/db');
 const catalog  = require('../services/catalog');
+const crm      = require('../services/crm');
 const outreach = require('../services/outreach');
 const agentSvc = require('../services/agents');
 const quoteSvc = require('../services/quote');
 const syncQ    = require('../services/sync-queue');
 const whatsapp = require('../services/whatsapp');
 const cfgStore = require('../services/config-store');
+const config   = require('../config');
 const logger   = require('../utils/logger');
 
 const router = express.Router();
@@ -166,8 +169,6 @@ router.get('/catalog', async (_req, res) => {
 
 router.post('/catalog/refresh', async (_req, res) => {
   try {
-    // Only delete Manager.io-sourced items (raw IS NOT NULL).
-    // Manual items added via admin (raw IS NULL) are preserved.
     await query(`DELETE FROM catalog_cache WHERE raw IS NOT NULL`);
     const items = await catalog.getCatalog();
     return res.json({ success: true, count: items.length });
@@ -362,12 +363,10 @@ router.post('/quotes', async (req, res) => {
       notes,
     });
 
-    // Send to customer via WhatsApp
     const msg = quoteSvc.buildWhatsAppMessage(quote, customer.name);
     await whatsapp.sendInteractive(phone, msg);
     await quoteSvc.markSent(quote.id);
 
-    // Set customer session to QUOTE_PENDING so their next tap is handled correctly
     const session = require('../services/session');
     const { STATES } = require('../orchestrator');
     const sess = await session.get(phone);
@@ -403,9 +402,49 @@ router.post('/sync-queue/retry/:id', async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+// ── CRM Bulk Sync ─────────────────────────────────────────────────────────────
 
-// ── Content & Flows — bot messages and menu items editable from admin dashboard ─
-// Routes placed here (before module.exports) so they are always registered.
+/**
+ * POST /sync/crm
+ * Push all local customers that have no crm_id to Twenty CRM.
+ * Safe to run repeatedly — already-synced customers are skipped.
+ */
+router.post('/sync/crm', async (_req, res) => {
+  if (!config.crm.url || !config.crm.apiKey) {
+    return res.status(400).json({ error: 'CRM not configured' });
+  }
+  try {
+    const unsynced = await query(
+      `SELECT id, phone, name, location FROM customers WHERE crm_id IS NULL ORDER BY created_at ASC`
+    );
+    const results = { synced: 0, failed: 0, skipped: 0, errors: [] };
+
+    for (const customer of unsynced.rows) {
+      try {
+        const crmId = await crm.upsertPerson({ phone: customer.phone, name: customer.name });
+        if (crmId) {
+          await query(`UPDATE customers SET crm_id = $1 WHERE id = $2`, [crmId, customer.id]);
+          if (customer.location) {
+            await crm.updatePerson(crmId, { location: customer.location });
+          }
+          results.synced++;
+        } else {
+          results.skipped++;
+        }
+      } catch (err) {
+        results.failed++;
+        results.errors.push({ phone: customer.phone, error: err.message });
+      }
+    }
+
+    logger.info('CRM bulk sync complete', results);
+    return res.json({ success: true, total: unsynced.rows.length, ...results });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Content & Flows ───────────────────────────────────────────────────────────
 
 router.get('/content/messages', async (_req, res) => {
   try {
@@ -470,8 +509,6 @@ router.delete('/content/menu-items/:id', async (req, res) => {
 });
 
 // ── Connection diagnostics ────────────────────────────────────────────────────
-// GET /api/v1/diagnostics — test all external service connections live.
-// Safe: read-only calls only (no data written).
 
 router.get('/diagnostics', async (_req, res) => {
   const results = {};
@@ -497,7 +534,6 @@ router.get('/diagnostics', async (_req, res) => {
   }
 
   // ── Twenty CRM ──
-  const config = require('../config');
   const crmStart = t();
   if (!config.crm.url || !config.crm.apiKey) {
     results.crm = { ok: false, error: 'CRM_URL or CRM_API_KEY not set', configured: false };
@@ -531,14 +567,12 @@ router.get('/diagnostics', async (_req, res) => {
   } else {
     try {
       const axios = require('axios');
-      // X-API-KEY header; business resolved server-side from key — no business key in URL
-      // GET /customers = read-only list endpoint; /customer-form is POST-only (create)
       const r = await axios.get(`${config.manager.url}/customers`, {
         headers: { 'X-API-KEY': config.manager.apiKey, 'Content-Type': 'application/json' },
         timeout: 8000,
         maxRedirects: 0,
       });
-      const customerCount = Array.isArray(r.data) ? r.data.length : '?';
+      const customerCount = Array.isArray(r.data) ? r.data.length : (r.data.totalRecords || '?');
       results.manager = { ok: true, configured: true, url: config.manager.url, ms: t() - mgrStart, customerCount };
     } catch (e) {
       results.manager = { ok: false, configured: true, url: config.manager.url, error: e.message, httpStatus: e.response?.status, ms: t() - mgrStart };
